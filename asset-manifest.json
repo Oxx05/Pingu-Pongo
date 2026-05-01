@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/Pingu-Pongo/static/css/main.a261616e.css",
+    "main.js": "/Pingu-Pongo/static/js/main.090544f7.js",
+    "static/js/453.b0ba9260.chunk.js": "/Pingu-Pongo/static/js/453.b0ba9260.chunk.js",
+    "index.html": "/Pingu-Pongo/index.html",
+    "main.a261616e.css.map": "/Pingu-Pongo/static/css/main.a261616e.css.map",
+    "main.090544f7.js.map": "/Pingu-Pongo/static/js/main.090544f7.js.map",
+    "453.b0ba9260.chunk.js.map": "/Pingu-Pongo/static/js/453.b0ba9260.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.a261616e.css",
+    "static/js/main.090544f7.js"
+  ]
+}
