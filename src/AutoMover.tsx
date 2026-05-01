@@ -70,6 +70,7 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
       rafRef.current = null;
       lastRef.current = null;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

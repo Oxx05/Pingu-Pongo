@@ -19,10 +19,9 @@ export default function ManualMover({ v, initialX = 40, initialY = 40, keys, onV
   const lastRef = useRef<number | null>(null);
 
   const [lastY, setLastY] = useState(initialY);
-  const [vy, setVy] = useState(0);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    setVy(pos.y - lastY);
     setLastY(pos.y);
     if (onVelocityChange) onVelocityChange(pos.y - lastY);
   }, [pos.y]);
@@ -58,6 +57,7 @@ export default function ManualMover({ v, initialX = 40, initialY = 40, keys, onV
     sizeRef.current = { w: rect.width, h: rect.height };
   }, [children]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
@@ -67,6 +67,7 @@ export default function ManualMover({ v, initialX = 40, initialY = 40, keys, onV
     };
   }, [keys]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const tick = (t: number) => {
       if (lastRef.current == null) lastRef.current = t;
