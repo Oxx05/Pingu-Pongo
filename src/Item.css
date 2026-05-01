@@ -1,0 +1,66 @@
+.item-bubble {
+  position: relative;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  backdrop-filter: blur(1.2px);
+  border: 2px solid var(--bubble-color);
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.2) 30%, rgba(255, 255, 255, 0.08) 60%, rgba(255, 255, 255, 0.05) 100%),
+    radial-gradient(circle at 68% 78%, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0) 55%);
+  box-shadow:
+    inset 0 -10px 16px rgba(255, 255, 255, 0.3),
+    inset 0 8px 14px rgba(255, 255, 255, 0.5),
+    0 0 14px var(--bubble-color);
+  animation: bubble-float 3.6s ease-in-out infinite;
+  will-change: transform;
+}
+
+.item-bubble::before {
+  content: "";
+  position: absolute;
+  width: 28%;
+  height: 28%;
+  top: 14%;
+  left: 18%;
+  border-radius: 50%;
+}
+
+.item-bubble::after {
+  content: "";
+  position: absolute;
+  width: 16%;
+  height: 16%;
+  bottom: 18%;
+  right: 20%;
+  border-radius: 50%;
+}
+
+.item-bubble-icon {
+  z-index: 1;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.15));
+}
+
+@keyframes bubble-float {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  25% {
+    transform: translate3d(2px, -4px, 0);
+  }
+  50% {
+    transform: translate3d(0, -7px, 0);
+  }
+  75% {
+    transform: translate3d(-2px, -3px, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .item-bubble {
+    animation: none;
+  }
+}

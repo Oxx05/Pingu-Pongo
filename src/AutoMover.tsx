@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 type AutoMoverProps = {
   vxRef: { current: number };
@@ -8,12 +8,12 @@ type AutoMoverProps = {
   initialX?: number;
   initialY?: number;
   onGoal?: (scored: string) => void;
+  teleportY?: number | null;
   children: React.ReactNode;
 };
 
-export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, onGoal, children }: AutoMoverProps) {
-  const [pos, setPos] = useState({ x: initialX, y: initialY });
-  const posRef = useRef({ x: initialX, y: initialY }); // fonte de verdade, sem updater pattern
+export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, onGoal, teleportY, children }: AutoMoverProps) {
+  const posRef = useRef({ x: initialX, y: initialY });
   const sizeRef = useRef({ w: 0, h: 0 });
   const elRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -27,6 +27,14 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
     const rect = el.getBoundingClientRect();
     sizeRef.current = { w: rect.width, h: rect.height };
   }, [children]);
+
+  const lastTeleportYRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (teleportY !== null && teleportY !== undefined && teleportY !== lastTeleportYRef.current) {
+      lastTeleportYRef.current = teleportY;
+      posRef.current.y = teleportY;
+    }
+  }, [teleportY]);
 
   useEffect(() => {
     const tick = (t: number) => {
@@ -60,7 +68,9 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
         };
       }
 
-      setPos({ ...posRef.current });
+      if (elRef.current) {
+        elRef.current.style.transform = `translate3d(${Math.round(posRef.current.x)}px,${Math.round(posRef.current.y)}px,0)`;
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
 
@@ -78,8 +88,10 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
       ref={elRef}
       style={{
         position: "fixed",
-        left: pos.x,
-        top: pos.y,
+        left: 0,
+        top: 0,
+        transform: `translate3d(${initialX}px,${initialY}px,0)`,
+        willChange: "transform",
         touchAction: "none",
       }}
     >

@@ -6,55 +6,111 @@ type ManualMoverProps = {
   v: number;
   initialX?: number;
   initialY?: number;
-  keys: Map<string,string>; // event.key :  direction
+  elementHeight?: number;
+  keys: Map<string, string>;
   onVelocityChange?: (vy: number) => void;
+  onShoot?: () => void;
+  onRotate?: () => void;
+  touchZone?: "left" | "right";
+  frozen?: boolean;
+  inverted?: boolean;
   children: React.ReactNode;
 };
 
-export default function ManualMover({ v, initialX = 40, initialY = 40, keys, onVelocityChange, children }: ManualMoverProps) {
-  const [pos, setPos] = useState({y: initialY});
-  const sizeRef = useRef({ w: 0, h: 0 });
+export default function ManualMover({
+  v,
+  initialX = 40,
+  initialY = 40,
+  elementHeight,
+  keys,
+  onVelocityChange,
+  onShoot,
+  onRotate,
+  touchZone,
+  frozen = false,
+  inverted = false,
+  children,
+}: ManualMoverProps) {
+  // vRef: sempre tem o valor mais recente de v, sem re-criar o RAF
+  const vRef = useRef(v);
+  useEffect(() => { vRef.current = v; }, [v]);
+
+  const frozenRef = useRef(frozen);
+  useEffect(() => { frozenRef.current = frozen; }, [frozen]);
+
+  const invertedRef = useRef(inverted);
+  useEffect(() => { invertedRef.current = inverted; }, [inverted]);
+
+  const posYRef = useRef(initialY);
+  const sizeRef = useRef({ w: 0, h: elementHeight ?? 0 });
   const elRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastRef = useRef<number | null>(null);
-
-  const [lastY, setLastY] = useState(initialY);
-
-  useEffect(() => {
-    setLastY(pos.y);
-    if (onVelocityChange) onVelocityChange(pos.y - lastY);
-  }, [pos.y]); // eslint-disable-line react-hooks/exhaustive-deps
-
-
-  const [keyUp, setKeyUp] = useState(false);
-  const [keyDown, setKeyDown] = useState(false);
-
-
-  const allowedKeys = Array.from(keys.keys());
-  const handleKeyDown = (event: KeyboardEvent) => {
-      if (allowedKeys.includes(event.key)) {
-        const k = keys.get(event.key) ?? ""
-
-        if (k === "up") setKeyUp(true);
-        else if (k === "down") setKeyDown(true);
-      }
-  };
-
-  const handleKeyUp = (event: KeyboardEvent) => {
-      if (allowedKeys.includes(event.key)) {
-        const k = keys.get(event.key) ?? ""
-
-        if (k === "up") setKeyUp(false);
-        else if (k === "down") setKeyDown(false);
-      }
-  };
+  const onVelocityChangeRef = useRef(onVelocityChange);
+  onVelocityChangeRef.current = onVelocityChange;
 
   useEffect(() => {
+    if (elementHeight !== undefined) sizeRef.current.h = elementHeight;
+  }, [elementHeight]);
+
+  useEffect(() => {
+    if (elementHeight !== undefined) return;
     const el = elRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     sizeRef.current = { w: rect.width, h: rect.height };
-  }, [children]);
+  }, [children, elementHeight]);
+
+  const touchYRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!touchZone) return;
+    const isMyZone = (x: number) =>
+      touchZone === "left" ? x < window.innerWidth / 2 : x >= window.innerWidth / 2;
+
+    const onStart = (e: TouchEvent) => {
+      for (const t of Array.from(e.changedTouches))
+        if (isMyZone(t.clientX)) { touchYRef.current = t.clientY; e.preventDefault(); }
+    };
+    const onMove = (e: TouchEvent) => {
+      for (const t of Array.from(e.touches))
+        if (isMyZone(t.clientX)) { touchYRef.current = t.clientY; e.preventDefault(); }
+    };
+    const onEnd = (e: TouchEvent) => {
+      if (!Array.from(e.touches).some(t => isMyZone(t.clientX))) touchYRef.current = null;
+    };
+
+    window.addEventListener("touchstart", onStart, { passive: false });
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onEnd);
+    return () => {
+      window.removeEventListener("touchstart", onStart);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onEnd);
+    };
+  }, [touchZone]);
+
+  const [keyUp, setKeyUp] = useState(false);
+  const [keyDown, setKeyDown] = useState(false);
+  const keyUpRef = useRef(false);
+  const keyDownRef = useRef(false);
+
+  const allowedKeys = Array.from(keys.keys());
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (!allowedKeys.includes(e.key)) return;
+    const k = keys.get(e.key) ?? "";
+    if (k === "up")   { setKeyUp(true);  keyUpRef.current = true; }
+    if (k === "down") { setKeyDown(true); keyDownRef.current = true; }
+  };
+  const handleKeyUp = (e: KeyboardEvent) => {
+    if (!allowedKeys.includes(e.key)) return;
+    const k = keys.get(e.key) ?? "";
+    if (k === "up")     { setKeyUp(false);  keyUpRef.current = false; }
+    if (k === "down")   { setKeyDown(false); keyDownRef.current = false; }
+    if (k === "shoot"  && onShoot)  onShoot();
+    if (k === "rotate" && onRotate) onRotate();
+  };
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
@@ -68,26 +124,36 @@ export default function ManualMover({ v, initialX = 40, initialY = 40, keys, onV
   useEffect(() => {
     const tick = (t: number) => {
       if (lastRef.current == null) lastRef.current = t;
-      const dt = (t - lastRef.current) / 1000;
+      const dt = Math.min((t - lastRef.current) / 1000, 0.05);
       lastRef.current = t;
 
-      setPos((p) => {
-        const maxY = window.innerHeight - sizeRef.current.h;
-        const minY = 0;
+      const h = sizeRef.current.h;
+      const maxY = window.innerHeight - h;
+      const minY = 0;
+      const prevY = posYRef.current;
+      let nextY = prevY;
 
-        let nextY = p.y;
- 
-        if (keyUp === true && keyDown === false){
-          nextY = Math.max(Math.max(p.y - v * dt, 0), Math.max(minY, 0));
+      if (!frozenRef.current) {
+        // invertedRef: troca up↔down
+        const goingUp   = invertedRef.current ? keyDownRef.current : keyUpRef.current;
+        const goingDown = invertedRef.current ? keyUpRef.current  : keyDownRef.current;
 
+        if (touchYRef.current !== null) {
+          nextY = Math.max(minY, Math.min(maxY, touchYRef.current - h / 2));
+        } else if (goingUp && !goingDown) {
+          nextY = Math.max(prevY - vRef.current * dt, minY);
+        } else if (goingDown && !goingUp) {
+          nextY = Math.min(prevY + vRef.current * dt, maxY);
         }
-        else if (keyDown === true && keyUp === false){
-          nextY = Math.min(Math.max(p.y + v * dt, 0), Math.max(maxY, 0));
+      }
 
+      if (nextY !== prevY) {
+        posYRef.current = nextY;
+        if (elRef.current) {
+          elRef.current.style.transform = `translate3d(0,${Math.round(nextY)}px,0)`;
         }
-
-        return {y: nextY};
-      });
+        if (onVelocityChangeRef.current) onVelocityChangeRef.current(nextY - prevY);
+      }
 
       rafRef.current = requestAnimationFrame(tick);
     };
@@ -98,7 +164,9 @@ export default function ManualMover({ v, initialX = 40, initialY = 40, keys, onV
       rafRef.current = null;
       lastRef.current = null;
     };
-  }, [keyUp, keyDown]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  void keyUp; void keyDown;
 
   return (
     <div
@@ -106,7 +174,9 @@ export default function ManualMover({ v, initialX = 40, initialY = 40, keys, onV
       style={{
         position: "fixed",
         left: initialX,
-        top: pos.y,
+        top: 0,
+        transform: `translate3d(0,${initialY}px,0)`,
+        willChange: "transform",
         touchAction: "none",
       }}
     >

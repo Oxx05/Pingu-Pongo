@@ -1,6 +1,6 @@
 body {
   margin: 0;
-  background: #000;
+  background: #0e0b18;
   font-family: 'Courier New', Courier, monospace;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -10,4 +10,22 @@ body {
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
+}
+
+/* Forçar landscape em mobile */
+@media (orientation: portrait) and (max-width: 900px) {
+  .portrait-overlay {
+    display: flex !important;
+  }
+}
+
+@keyframes buff-shrink {
+  from { width: 100%; }
+  to   { width: 0%; }
+}
+
+@keyframes notif-fade {
+  0%   { opacity: 1;   transform: translateY(0); }
+  70%  { opacity: 0.9; transform: translateY(-8px); }
+  100% { opacity: 0;   transform: translateY(-16px); }
 }

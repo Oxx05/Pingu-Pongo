@@ -11,11 +11,13 @@ const Bola = forwardRef<HTMLDivElement, BallProps>(
         <div
             ref={ref}
             style={{
-                backgroundColor: "#d6c0ff",
+                backgroundColor: "#e8f4fb",
                 width: radius * 2,
                 height: radius * 2,
                 borderRadius: "50%",
-                boxShadow: "0 0 10px rgba(180,130,255,0.55), 0 0 30px rgba(160,100,255,0.18)",
+                border: "1.5px solid #e8f4fb",
+                boxSizing: "border-box",
+                boxShadow: "0 0 8px rgba(200,235,255,0.28), 0 0 18px rgba(160,210,255,0.08)",
             }}
         ></div>
     )
