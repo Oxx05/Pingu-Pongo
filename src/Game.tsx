@@ -9,10 +9,12 @@ import Pontuacao from "./Pontuacao.tsx";
 import StoredItems from "./StoredItems.tsx";
 import type { LucideIcon } from "lucide-react";
 import Item from "./Item.tsx";
-import Menu from "./Menu.tsx";
 import Shot from "./Shot.tsx";
 import type { GameConfig } from "./gameTypes.ts";
 import { DEFAULT_CONFIG } from "./gameTypes.ts";
+import type { DataConnection } from "peerjs";
+import { iconToId } from "./iconRegistry.ts";
+import type { StateMsg } from "./peerTypes.ts";
 import {
   Shuffle,
   Gauge,
@@ -85,11 +87,15 @@ type Notification = {
   player: PlayerId;
 };
 
-export default function Game() {
-  const [gameStarted, setGameStarted] = useState(false);
-  const [config, setConfig] = useState<GameConfig>(DEFAULT_CONFIG);
+type GameProps = {
+  config?: GameConfig;
+  conn?: DataConnection | null;   // provided → host mode
+  onBack?: () => void;
+};
+
+export default function Game({ config: configProp, conn, onBack }: GameProps = {}) {
+  const [config] = useState<GameConfig>(configProp ?? DEFAULT_CONFIG);
   const configRef = useRef(config);
-  useEffect(() => { configRef.current = config; }, [config]);
   const [winner, setWinner] = useState<PlayerId | null>(null);
 
   const barra1Ref = useRef<HTMLDivElement>(null);
@@ -102,12 +108,12 @@ export default function Game() {
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const BALL_RADIUS = Math.round(Math.min(20, vh * 0.028));
+  const BALL_RADIUS = isTouchDevice ? Math.round(Math.min(14, vh * 0.02)) : Math.round(Math.min(20, vh * 0.028));
   const BALL_RADIUS_BIG = Math.round(BALL_RADIUS * 2.2);
   const BALL_RADIUS_MINI = Math.round(BALL_RADIUS * 0.45);
   const START_BALL_SPEED = 500;
-  const BASE_PADDLE_HEIGHT = Math.round(Math.min(200, vh * 0.32));
-  const BASE_PADDLE_WIDTH = Math.round(Math.min(20, vh * 0.04));
+  const BASE_PADDLE_HEIGHT = isTouchDevice ? Math.round(Math.min(160, vh * 0.25)) : Math.round(Math.min(200, vh * 0.32));
+  const BASE_PADDLE_WIDTH = isTouchDevice ? Math.round(Math.min(14, vh * 0.03)) : Math.round(Math.min(20, vh * 0.04));
   const ITEM_RADIUS = Math.round(Math.min(18, vh * 0.04));
   const PADDLE_OFFSET = Math.round(Math.min(100, Math.max(36, vw * 0.08)));
 
@@ -130,14 +136,21 @@ export default function Game() {
   const [teleportY, setTeleportY] = useState<number | null>(null);
   const [ballGhost, setBallGhost] = useState(false);
 
-  // Mirrors for swap — needed because item functions capture stale closures
+  // Mirrors for swap + host state sync
   useEffect(() => { current1Ref.current = current1; }, [current1]);
   useEffect(() => { current2Ref.current = current2; }, [current2]);
   useEffect(() => { next1Ref.current = next1; }, [next1]);
   useEffect(() => { next2Ref.current = next2; }, [next2]);
+  useEffect(() => { ballGhostRef.current = ballGhost; }, [ballGhost]);
+  useEffect(() => { winnerRef.current = winner; }, [winner]);
+  useEffect(() => { shieldActiveRefH.current = shieldActive; }, [shieldActive]);
+  useEffect(() => { frozenStateRef.current = frozen; }, [frozen]);
   const [activeItems, setActiveItems] = useState<SpawnedItem[]>([]);
   const [activeBuffs, setActiveBuffs] = useState<ActiveBuff[]>([]);
+  useEffect(() => { activeBuffsRef.current = activeBuffs; }, [activeBuffs]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  useEffect(() => { notificationsRef.current = notifications; }, [notifications]);
+  useEffect(() => { decoysRef.current = decoys; }, [decoys]);
   const [isPortrait, setIsPortrait] = useState(() => window.innerWidth < window.innerHeight && window.innerWidth <= 900);
 
   type ShotData = { id: string; startX: number; startY: number; direction: 1 | -1; shooter: PlayerId };
@@ -165,6 +178,18 @@ export default function Game() {
   const itemSpawnTimeoutRef = useRef<number | null>(null);
   const itemPickupRafRef = useRef<number | null>(null);
   const activeItemsRef = useRef<SpawnedItem[]>([]);
+
+  // ── Host-mode refs (mirror state for the state-sync RAF) ────────────
+  const guestInputRef   = useRef({ up: false, down: false });
+  const ballGhostRef    = useRef(false);
+  const winnerRef       = useRef<PlayerId | null>(null);
+  const activeBuffsRef  = useRef<ActiveBuff[]>([]);
+  const decoysRef       = useRef<Decoy[]>([]);
+  const notificationsRef = useRef<Notification[]>([]);
+  const shieldActiveRefH = useRef<PlayerMapBool>({ player1: false, player2: false });
+  const frozenStateRef  = useRef<PlayerMapBool>({ player1: false, player2: false });
+  const shoot2Ref       = useRef<() => void>(() => {});
+  const rotate2Ref      = useRef<() => void>(() => {});
 
   const VxRef = useRef(0);
   const VyRef = useRef(0);
@@ -966,8 +991,6 @@ export default function Game() {
   }, [shieldActive]);
 
   useEffect(() => {
-    if (!gameStarted) return;
-
     function scheduleNextSpawn() {
       const base = configRef.current.spawnDelay;
       const delay = base + Math.random() * base * 0.5;
@@ -997,7 +1020,7 @@ export default function Game() {
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameStarted]);
+  }, []);
 
   useEffect(() => {
     function checkItemPickup() {
@@ -1103,6 +1126,7 @@ export default function Game() {
       setCurrent2(null);
     }
   }
+  shoot2Ref.current = shoot2;
 
   function rotate1() {
     if (!current1 || !next1) return;
@@ -1119,7 +1143,62 @@ export default function Game() {
     setCurrent2(b);
     setNext2(a);
   }
+  rotate2Ref.current = rotate2;
 
+  // ── Host mode: receive guest inputs & send state ──────────────────
+  useEffect(() => {
+    if (!conn) return;
+    const onData = (raw: unknown) => {
+      const msg = raw as { type: string; up?: boolean; down?: boolean; action?: string };
+      if (msg.type === "input") {
+        guestInputRef.current.up   = !!msg.up;
+        guestInputRef.current.down = !!msg.down;
+      } else if (msg.type === "action") {
+        if (msg.action === "shoot")  shoot2Ref.current();
+        if (msg.action === "rotate") rotate2Ref.current();
+      }
+    };
+    conn.on("data", onData);
+    return () => { conn.off("data", onData); };
+  }, [conn]);
+
+  useEffect(() => {
+    if (!conn) return;
+    let rafId: number;
+    const tick = () => {
+      if (!conn.open) { rafId = requestAnimationFrame(tick); return; }
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const ballEl = bolaRef.current;
+      const p1El   = barra1Ref.current;
+      const p2El   = barra2Ref.current;
+      if (!ballEl || !p1El || !p2El) { rafId = requestAnimationFrame(tick); return; }
+      const bR  = ballEl.getBoundingClientRect();
+      const p1R = p1El.getBoundingClientRect();
+      const p2R = p2El.getBoundingClientRect();
+      const state: StateMsg = {
+        type: "state",
+        bx: bR.left / vw, by: bR.top / vh, br: (bR.width / 2) / vh, bg: ballGhostRef.current,
+        p1y: p1R.top / vh, p2y: p2R.top / vh, p1h: p1R.height / vh, p2h: p2R.height / vh, pw: p1R.width,
+        score: scoreRef.current as [number, number],
+        winner: winnerRef.current,
+        current1: current1Ref.current ? { iconId: iconToId(current1Ref.current.icon), color: current1Ref.current.color } : null,
+        current2: current2Ref.current ? { iconId: iconToId(current2Ref.current.icon), color: current2Ref.current.color } : null,
+        next1: next1Ref.current ? { iconId: iconToId(next1Ref.current.icon), color: next1Ref.current.color } : null,
+        next2: next2Ref.current ? { iconId: iconToId(next2Ref.current.icon), color: next2Ref.current.color } : null,
+        items: activeItemsRef.current.map(it => ({ id: it.instanceId, x: it.x / vw, y: it.y / vh, r: it.radius / vh, color: it.color, iconId: iconToId(it.icon) })),
+        buffs: activeBuffsRef.current.map(b => ({ key: b.key, label: b.label, iconId: iconToId(b.icon), color: b.color, player: b.player, startedAt: b.startedAt, duration: b.duration })),
+        decoys: decoysRef.current.map(d => ({ id: d.id, x: d.x / vw, y: d.y / vh, r: d.radius / vh })),
+        notifs: notificationsRef.current.map(n => ({ id: n.id, text: n.text, color: n.color, player: n.player })),
+        s1: shieldActiveRefH.current.player1, s2: shieldActiveRefH.current.player2,
+        f1: frozenStateRef.current.player1,  f2: frozenStateRef.current.player2,
+      };
+      try { conn.send(state); } catch {}
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [conn]);
 
   useEffect(() => {
     const timers = timeoutByKeyRef.current;
@@ -1136,10 +1215,6 @@ export default function Game() {
 
   const paddleHeight1 = BASE_PADDLE_HEIGHT * playerSizeMultiplier.player1;
   const paddleHeight2 = BASE_PADDLE_HEIGHT * playerSizeMultiplier.player2;
-
-  if (!gameStarted) {
-    return <Menu onPlay={(cfg) => { setConfig(cfg); resetGame(); setGameStarted(true); }} />;
-  }
 
   return (
     <>
@@ -1184,16 +1259,16 @@ export default function Game() {
           textAlign: "center",
         }}>
           {winner === "player1" ? "JOGADOR 1" : "JOGADOR 2"}<br />
-          <span style={{ fontSize: "0.6em", color: "rgba(255,255,255,0.5)", fontWeight: "normal" }}>GANHOU!</span>
+          <span style={{ fontSize: "0.6em", color: "rgba(255,255,255,0.72)", fontWeight: "normal" }}>GANHOU!</span>
         </div>
         <div style={{ display: "flex", gap: 14 }}>
           <button
-            onClick={() => { resetGame(); setGameStarted(false); }}
+            onClick={() => { resetGame(); onBack?.(); }}
             style={winBtnStyle}
           >MENU</button>
           <button
             onClick={() => { resetGame(); }}
-            style={{ ...winBtnStyle, borderColor: "rgba(232,244,251,0.5)", color: "#e8f4fb" }}
+            style={{ ...winBtnStyle, background: "rgba(86,209,196,0.1)", borderColor: "rgba(86,209,196,0.6)", color: "#56d1c4" }}
           >JOGAR DE NOVO</button>
         </div>
       </div>
@@ -1268,7 +1343,7 @@ export default function Game() {
         initialX={vw - PADDLE_OFFSET - BASE_PADDLE_WIDTH}
         initialY={(vh - paddleHeight2) / 2}
         elementHeight={paddleHeight2}
-        keys={new Map([
+        keys={conn ? new Map() : new Map([
           ["ArrowUp", "up"],
           ["ArrowDown", "down"],
           ["Enter", "shoot"],
@@ -1279,11 +1354,12 @@ export default function Game() {
         }}
         onShoot={shoot2}
         onRotate={rotate2}
-        touchZone="right"
+        touchZone={conn ? undefined : "right"}
         frozen={frozen.player2}
         inverted={inverted.player2}
         driftForce={drift.player2}
         paused={isPortrait || winner !== null}
+        externalInput={conn ? guestInputRef : null}
       >
         <Barra ref={barra2Ref} height={paddleHeight2} width={BASE_PADDLE_WIDTH} color="#f5895e" glowColor="245,137,94" />
       </ManualMover>
@@ -1338,23 +1414,26 @@ export default function Game() {
 
       {/* Botão voltar ao menu */}
       <button
-        onClick={() => { resetGame(); setGameStarted(false); }}
+        onClick={() => { resetGame(); onBack?.(); }}
         style={{
           position: "fixed",
-          top: 12,
+          top: 10,
           left: "50%",
           transform: "translateX(-50%)",
           background: "rgba(196,170,255,0.1)",
           border: "1px solid rgba(196,170,255,0.35)",
           color: "rgba(196,170,255,0.75)",
           fontFamily: "'Courier New', Courier, monospace",
-          fontSize: "0.7rem",
+          fontSize: "clamp(0.65rem, 1.2vw, 0.85rem)",
           fontWeight: "bold",
           letterSpacing: "0.25em",
-          padding: "5px 18px",
+          padding: "clamp(5px, 1vh, 10px) clamp(14px, 2vw, 28px)",
+          minHeight: 36,
+          minWidth: 80,
           borderRadius: 4,
           cursor: "pointer",
           zIndex: 50,
+          whiteSpace: "nowrap",
         }}
       >
         MENU
@@ -1368,11 +1447,13 @@ export default function Game() {
             <MobileBtn label="TROCAR" color="#56d1c4" onPress={rotate1} />
             <MobileBtn label="USAR" color="#56d1c4" onPress={shoot1} />
           </div>
-          {/* Jogador 2 — botões bottom-right */}
-          <div style={{ position: "fixed", bottom: 20, right: 16, display: "flex", gap: 10, zIndex: 50 }}>
-            <MobileBtn label="USAR" color="#f5895e" onPress={shoot2} />
-            <MobileBtn label="TROCAR" color="#f5895e" onPress={rotate2} />
-          </div>
+          {/* Jogador 2 — botões bottom-right (só no modo local) */}
+          {!conn && (
+            <div style={{ position: "fixed", bottom: 20, right: 16, display: "flex", gap: 10, zIndex: 50 }}>
+              <MobileBtn label="USAR" color="#f5895e" onPress={shoot2} />
+              <MobileBtn label="TROCAR" color="#f5895e" onPress={rotate2} />
+            </div>
+          )}
         </>
       )}
 
@@ -1417,14 +1498,14 @@ export default function Game() {
 }
 
 const winBtnStyle: React.CSSProperties = {
-  background: "transparent",
-  border: "1px solid rgba(255,255,255,0.2)",
-  color: "rgba(255,255,255,0.55)",
+  background: "rgba(255,255,255,0.05)",
+  border: "1px solid rgba(255,255,255,0.45)",
+  color: "rgba(255,255,255,0.88)",
   fontFamily: "'Courier New', Courier, monospace",
-  fontSize: "0.85rem",
+  fontSize: "0.9rem",
   fontWeight: "bold",
   letterSpacing: "0.2em",
-  padding: "10px 28px",
+  padding: "12px 32px",
   borderRadius: 4,
   cursor: "pointer",
 };

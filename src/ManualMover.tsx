@@ -16,6 +16,8 @@ type ManualMoverProps = {
   inverted?: boolean;
   driftForce?: number;
   paused?: boolean;
+  /** When provided, overrides keyboard + touch for movement (online guest inputs) */
+  externalInput?: { current: { up: boolean; down: boolean } } | null;
   children: React.ReactNode;
 };
 
@@ -33,6 +35,7 @@ export default function ManualMover({
   inverted = false,
   driftForce = 0,
   paused = false,
+  externalInput = null,
   children,
 }: ManualMoverProps) {
   // vRef: sempre tem o valor mais recente de v, sem re-criar o RAF
@@ -164,20 +167,24 @@ export default function ManualMover({
       let nextY = prevY;
 
       if (!frozenRef.current) {
-        // invertedRef: troca up↔down
-        const goingUp   = invertedRef.current ? keyDownRef.current : keyUpRef.current;
-        const goingDown = invertedRef.current ? keyUpRef.current  : keyDownRef.current;
-
-        if (touchYRef.current !== null) {
-          // Move em direcção ao dedo à velocidade do player (não teleporte)
+        if (externalInput) {
+          // Online mode: use remote player inputs, ignore local keyboard/touch
+          const goingUp   = invertedRef.current ? externalInput.current.down : externalInput.current.up;
+          const goingDown = invertedRef.current ? externalInput.current.up   : externalInput.current.down;
+          if (goingUp && !goingDown)   nextY = Math.max(prevY - vRef.current * dt, minY);
+          else if (goingDown && !goingUp) nextY = Math.min(prevY + vRef.current * dt, maxY);
+        } else if (touchYRef.current !== null) {
+          // Touch: move em direcção ao dedo à velocidade do player
           const target = Math.max(minY, Math.min(maxY, touchYRef.current - h / 2));
           const diff = target - prevY;
           const maxMove = vRef.current * dt;
           nextY = prevY + Math.max(-maxMove, Math.min(maxMove, diff));
-        } else if (goingUp && !goingDown) {
-          nextY = Math.max(prevY - vRef.current * dt, minY);
-        } else if (goingDown && !goingUp) {
-          nextY = Math.min(prevY + vRef.current * dt, maxY);
+        } else {
+          // invertedRef: troca up↔down
+          const goingUp   = invertedRef.current ? keyDownRef.current : keyUpRef.current;
+          const goingDown = invertedRef.current ? keyUpRef.current  : keyDownRef.current;
+          if (goingUp && !goingDown)   nextY = Math.max(prevY - vRef.current * dt, minY);
+          else if (goingDown && !goingUp) nextY = Math.min(prevY + vRef.current * dt, maxY);
         }
       }
 

@@ -7,6 +7,8 @@ import { DEFAULT_CONFIG } from "./gameTypes.ts";
 
 type MenuProps = {
   onPlay: (config: GameConfig) => void;
+  onOnline?: () => void;
+  defaultConfig?: GameConfig;
 };
 
 type ItemInfo = {
@@ -52,8 +54,8 @@ const ITEMS: ItemInfo[] = [
 
 const isTouchDevice = typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
 
-export default function Menu({ onPlay }: MenuProps) {
-  const [config, setConfig] = useState<GameConfig>(DEFAULT_CONFIG);
+export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
+  const [config, setConfig] = useState<GameConfig>(defaultConfig ?? DEFAULT_CONFIG);
 
   return (
     <div style={styles.overlay}>
@@ -61,19 +63,37 @@ export default function Menu({ onPlay }: MenuProps) {
 
         {/* Título */}
         <div style={styles.titleBlock}>
-          <div style={styles.title}>PINGU PONGO</div>
+          <div style={styles.title} className="menu-title">PINGU PONGO</div>
           <div style={styles.subtitle}>Pong com poderes</div>
         </div>
 
-        {/* Botão Jogar */}
-        <button style={styles.playBtn} onClick={() => onPlay(config)}>
-          JOGAR
-        </button>
+        {/* Botões de jogo */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, width: "100%" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 14, justifyContent: "center" }}>
+            <button className="menu-btn" style={styles.playBtn} onClick={() => onPlay(config)}>
+              JOGAR LOCAL
+            </button>
+            {onOnline && (
+              <button
+                className="menu-btn menu-btn-online"
+                style={{ ...styles.playBtn, borderColor: "rgba(86,209,196,0.45)", color: "#56d1c4", boxShadow: "0 0 24px rgba(86,209,196,0.06)" }}
+                onClick={onOnline}
+              >
+                JOGAR ONLINE
+              </button>
+            )}
+          </div>
+          {onOnline && (
+            <div style={{ fontFamily: "'Courier New', Courier, monospace", fontSize: "0.68rem", color: "rgba(255,255,255,0.38)", letterSpacing: "0.15em" }}>
+              online: P2P sem servidor
+            </div>
+          )}
+        </div>
 
         {/* Configurações */}
         <div style={styles.section}>
           <div style={styles.sectionTitle}>CONFIGURAÇÕES</div>
-          <div style={styles.configTable}>
+          <div style={styles.configCard}>
             <ConfigRow label="GOLOS P/ GANHAR">
               {([3, 5, 7, 0] as const).map(v => (
                 <OptionBtn key={v} active={config.goalsToWin === v} onClick={() => setConfig(c => ({ ...c, goalsToWin: v }))}>
@@ -81,6 +101,7 @@ export default function Menu({ onPlay }: MenuProps) {
                 </OptionBtn>
               ))}
             </ConfigRow>
+            <div style={styles.configDivider} />
             <ConfigRow label="SPAWN DE ITENS">
               {([{ label: "RÁPIDO", v: 3000 }, { label: "NORMAL", v: 8000 }, { label: "LENTO", v: 15000 }]).map(opt => (
                 <OptionBtn key={opt.v} active={config.spawnDelay === opt.v} onClick={() => setConfig(c => ({ ...c, spawnDelay: opt.v }))}>
@@ -88,6 +109,7 @@ export default function Menu({ onPlay }: MenuProps) {
                 </OptionBtn>
               ))}
             </ConfigRow>
+            <div style={styles.configDivider} />
             <ConfigRow label="SPIN DA BOLA">
               <OptionBtn active={config.spinEnabled} onClick={() => setConfig(c => ({ ...c, spinEnabled: true }))}>ON</OptionBtn>
               <OptionBtn active={!config.spinEnabled} onClick={() => setConfig(c => ({ ...c, spinEnabled: false }))}>OFF</OptionBtn>
@@ -160,7 +182,7 @@ export default function Menu({ onPlay }: MenuProps) {
               return (
                 <div key={item.name + item.color} style={styles.itemRow}>
                   <div style={{ ...styles.iconBox, background: item.color + "22", border: `1px solid ${item.color}55` }}>
-                    <Icon size={16} color={item.color} />
+                    <Icon size={20} color={item.color} />
                   </div>
                   <div style={styles.itemText}>
                     <span style={{ ...styles.itemName, color: item.color }}>{item.name}</span>
@@ -190,18 +212,19 @@ function OptionBtn({ active, onClick, children }: { active: boolean; onClick: ()
   return (
     <button
       onClick={onClick}
+      className="menu-opt-btn"
       style={{
         background: active ? "rgba(232,244,251,0.12)" : "transparent",
         border: `1px solid ${active ? "rgba(232,244,251,0.5)" : "rgba(255,255,255,0.12)"}`,
-        color: active ? "#e8f4fb" : "rgba(255,255,255,0.35)",
+        color: active ? "#e8f4fb" : "rgba(255,255,255,0.58)",
         fontFamily: "'Courier New', Courier, monospace",
-        fontSize: "0.78rem",
+        fontSize: "clamp(0.82rem, 1.2vw, 0.98rem)",
         fontWeight: active ? "bold" : "normal",
         letterSpacing: "0.08em",
-        padding: "5px 12px",
+        padding: "7px 16px",
+        minHeight: 36,
         borderRadius: 4,
         cursor: "pointer",
-        transition: "all 0.1s",
       }}
     >
       {children}
@@ -234,33 +257,33 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     alignItems: "flex-start",
     overflowY: "auto",
+    overflowX: "hidden",
     zIndex: 100,
   },
   container: {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    gap: 40,
-    padding: "56px 32px 72px",
+    gap: 36,
+    padding: "56px 24px 72px",
     width: "100%",
-    maxWidth: 760,
+    maxWidth: 1100,
     boxSizing: "border-box",
   },
   titleBlock: {
     textAlign: "center",
   },
   title: {
-    fontSize: "clamp(2.4rem, 10vw, 4.5rem)",
+    fontSize: "clamp(2.4rem, 8vw, 5rem)",
     fontFamily: "'Courier New', Courier, monospace",
     fontWeight: "bold",
     color: "#e8f4fb",
-    textShadow: "0 0 40px rgba(200,235,255,0.2)",
     letterSpacing: "0.08em",
   },
   subtitle: {
     marginTop: 8,
-    fontSize: "1rem",
-    color: "rgba(255,255,255,0.35)",
+    fontSize: "clamp(0.9rem, 1.4vw, 1.1rem)",
+    color: "rgba(255,255,255,0.55)",
     fontFamily: "'Courier New', Courier, monospace",
     letterSpacing: "0.2em",
     textTransform: "uppercase",
@@ -270,140 +293,162 @@ const styles: Record<string, React.CSSProperties> = {
     border: "2px solid rgba(232,244,251,0.5)",
     color: "#e8f4fb",
     fontFamily: "'Courier New', Courier, monospace",
-    fontSize: "1.25rem",
+    fontSize: "clamp(0.95rem, 1.6vw, 1.2rem)",
     fontWeight: "bold",
-    letterSpacing: "0.25em",
-    padding: "14px 56px",
+    letterSpacing: "0.22em",
+    padding: "14px 40px",
     borderRadius: 4,
     cursor: "pointer",
+    whiteSpace: "nowrap",
     boxShadow: "0 0 28px rgba(200,235,255,0.08)",
-    transition: "all 0.15s",
   },
   section: {
     width: "100%",
     display: "flex",
     flexDirection: "column",
     gap: 14,
+    alignItems: "center",
   },
   sectionTitle: {
-    fontSize: "0.82rem",
+    width: "100%",
+    fontSize: "clamp(0.78rem, 1.1vw, 0.95rem)",
     fontFamily: "'Courier New', Courier, monospace",
-    color: "rgba(255,255,255,0.3)",
+    color: "rgba(255,255,255,0.55)",
     letterSpacing: "0.3em",
     textTransform: "uppercase",
-    borderBottom: "1px solid rgba(255,255,255,0.08)",
-    paddingBottom: 8,
+    borderBottom: "1px solid rgba(255,255,255,0.12)",
+    paddingBottom: 10,
+    textAlign: "center",
   },
   touchHint: {
     display: "flex",
     flexDirection: "column",
     gap: 12,
+    width: "100%",
   },
   touchHintText: {
-    fontSize: "0.9rem",
-    color: "rgba(255,255,255,0.55)",
+    fontSize: "clamp(0.9rem, 1.4vw, 1.05rem)",
+    color: "rgba(255,255,255,0.72)",
     fontFamily: "'Courier New', Courier, monospace",
     textAlign: "center",
   },
   landscapeHint: {
-    fontSize: "0.78rem",
-    color: "rgba(255,255,255,0.25)",
+    fontSize: "clamp(0.75rem, 1.1vw, 0.9rem)",
+    color: "rgba(255,255,255,0.48)",
     fontFamily: "'Courier New', Courier, monospace",
     textAlign: "center",
     fontStyle: "italic",
   },
   controlGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 12,
+    display: "flex",
+    flexWrap: "wrap" as const,
+    justifyContent: "center",
+    gap: 16,
+    width: "100%",
   },
   card: {
     border: "1px solid",
-    borderRadius: 6,
-    padding: "14px 16px",
+    borderRadius: 8,
+    padding: "clamp(16px, 2vw, 24px) clamp(18px, 2.5vw, 28px)",
     display: "flex",
     flexDirection: "column",
-    gap: 10,
+    gap: 14,
     background: "rgba(255,255,255,0.02)",
+    minWidth: 260,
+    flex: "1 1 260px",
+    maxWidth: 420,
   },
   cardTitle: {
     fontFamily: "'Courier New', Courier, monospace",
     fontWeight: "bold",
-    fontSize: "0.95rem",
+    fontSize: "clamp(1rem, 1.6vw, 1.2rem)",
     letterSpacing: "0.08em",
     marginBottom: 2,
   },
   keyRow: {
     display: "flex",
     alignItems: "center",
-    gap: 10,
+    gap: 12,
   },
   kbd: {
     background: "rgba(255,255,255,0.08)",
     border: "1px solid rgba(255,255,255,0.15)",
     borderRadius: 4,
-    padding: "3px 10px",
+    padding: "5px 12px",
     fontFamily: "'Courier New', Courier, monospace",
-    fontSize: "0.88rem",
+    fontSize: "clamp(0.88rem, 1.3vw, 1rem)",
     color: "rgba(255,255,255,0.85)",
     whiteSpace: "nowrap",
-    minWidth: 56,
+    minWidth: 72,
     textAlign: "center",
     display: "inline-block",
   },
   keyAction: {
-    fontSize: "0.9rem",
-    color: "rgba(255,255,255,0.45)",
+    fontSize: "clamp(0.9rem, 1.3vw, 1rem)",
+    color: "rgba(255,255,255,0.7)",
     fontFamily: "'Courier New', Courier, monospace",
   },
-  configTable: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 10,
+  configCard: {
+    width: "100%",
+    maxWidth: 580,
+    background: "rgba(255,255,255,0.025)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  configDivider: {
+    height: 1,
+    background: "rgba(255,255,255,0.07)",
+    margin: "0",
   },
   configRow: {
     display: "flex",
+    flexDirection: "row" as const,
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 12,
+    gap: 16,
+    padding: "14px 20px",
     flexWrap: "wrap" as const,
   },
   configLabel: {
     fontFamily: "'Courier New', Courier, monospace",
-    fontSize: "0.78rem",
-    color: "rgba(255,255,255,0.45)",
+    fontSize: "clamp(0.78rem, 1.1vw, 0.9rem)",
+    color: "rgba(255,255,255,0.68)",
     letterSpacing: "0.1em",
-    minWidth: 140,
+    flexShrink: 0,
+    whiteSpace: "nowrap" as const,
   },
   configBtns: {
     display: "flex",
     gap: 6,
     flexWrap: "wrap" as const,
+    justifyContent: "flex-end",
   },
   itemsNote: {
-    fontSize: "0.9rem",
-    color: "rgba(255,255,255,0.35)",
+    fontSize: "clamp(0.88rem, 1.3vw, 1rem)",
+    color: "rgba(255,255,255,0.6)",
     fontFamily: "'Courier New', Courier, monospace",
     textAlign: "center",
-    lineHeight: 1.5,
+    lineHeight: 1.6,
   },
   itemsGrid: {
     display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 8,
+    gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))",
+    gap: 10,
+    width: "100%",
   },
   itemRow: {
     display: "flex",
     alignItems: "center",
-    gap: 10,
-    padding: "6px 8px",
-    borderRadius: 6,
+    gap: 12,
+    padding: "10px 12px",
+    borderRadius: 8,
     background: "rgba(255,255,255,0.02)",
   },
   iconBox: {
-    width: 34,
-    height: 34,
-    borderRadius: 7,
+    width: 42,
+    height: 42,
+    borderRadius: 9,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -412,18 +457,19 @@ const styles: Record<string, React.CSSProperties> = {
   itemText: {
     display: "flex",
     flexDirection: "column",
-    gap: 1,
+    gap: 3,
     minWidth: 0,
   },
   itemName: {
     fontFamily: "'Courier New', Courier, monospace",
-    fontSize: "0.82rem",
+    fontSize: "clamp(0.88rem, 1.3vw, 1rem)",
     fontWeight: "bold",
     letterSpacing: "0.02em",
   },
   itemDesc: {
     fontFamily: "'Courier New', Courier, monospace",
-    fontSize: "0.76rem",
-    color: "rgba(255,255,255,0.38)",
+    fontSize: "clamp(0.78rem, 1.1vw, 0.88rem)",
+    color: "rgba(255,255,255,0.58)",
+    lineHeight: 1.4,
   },
 };
