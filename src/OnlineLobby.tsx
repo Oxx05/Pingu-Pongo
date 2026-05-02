@@ -78,14 +78,6 @@ export default function OnlineLobby({ onBack, onHostStart, onGuestStart }: Props
 
     peer.on("open", () => {
       const conn = peer.connect(code, { reliable: true });
-      conn.on("open", () => {
-        handedOffRef.current = true;
-        onGuestStart(conn);
-      });
-      conn.on("error", () => {
-        setError("Não foi possível ligar. Verifica o código.");
-        setPhase({ t: "joining" });
-      });
       const t = window.setTimeout(() => {
         if (!conn.open) {
           setError("Tempo esgotado. Verifica o código.");
@@ -93,7 +85,16 @@ export default function OnlineLobby({ onBack, onHostStart, onGuestStart }: Props
           peer.destroy();
         }
       }, 8000);
-      conn.on("open", () => clearTimeout(t));
+      conn.on("open", () => {
+        clearTimeout(t);
+        handedOffRef.current = true;
+        onGuestStart(conn);
+      });
+      conn.on("error", () => {
+        clearTimeout(t);
+        setError("Não foi possível ligar. Verifica o código.");
+        setPhase({ t: "joining" });
+      });
     });
 
     peer.on("error", () => {
