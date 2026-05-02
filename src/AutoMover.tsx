@@ -7,12 +7,15 @@ type AutoMoverProps = {
   vyRef: { current: number };
   initialX?: number;
   initialY?: number;
-  onGoal?: (scored: string) => void;
+  onGoal?: (scored: "player1" | "player2") => void;
   teleportY?: number | null;
+  vyAccelRef?: { current: number };
+  magnetRef?: { current: boolean };
+  paused?: boolean;
   children: React.ReactNode;
 };
 
-export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, onGoal, teleportY, children }: AutoMoverProps) {
+export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, onGoal, teleportY, vyAccelRef, magnetRef, paused = false, children }: AutoMoverProps) {
   const posRef = useRef({ x: initialX, y: initialY });
   const sizeRef = useRef({ w: 0, h: 0 });
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -28,6 +31,9 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
     sizeRef.current = { w: rect.width, h: rect.height };
   }, [children]);
 
+  const pausedRef = useRef(paused);
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
+
   const lastTeleportYRef = useRef<number | null>(null);
   useEffect(() => {
     if (teleportY !== null && teleportY !== undefined && teleportY !== lastTeleportYRef.current) {
@@ -38,14 +44,54 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
 
   useEffect(() => {
     const tick = (t: number) => {
+      if (pausedRef.current) {
+        lastRef.current = t; // keep time in sync so dt doesn't spike on resume
+        rafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
       if (lastRef.current == null) lastRef.current = t;
-      const dt = (t - lastRef.current) / 1000;
+      const dt = Math.min((t - lastRef.current) / 1000, 0.05);
       lastRef.current = t;
+
+      // Fallback size measurement if not yet measured
+      if (sizeRef.current.w === 0 && elRef.current) {
+        const r = elRef.current.getBoundingClientRect();
+        if (r.width > 0) sizeRef.current = { w: r.width, h: r.height };
+      }
+
+      // Aplicar spin (aceleração em Y impartida pela barra)
+      if (vyAccelRef) {
+        vyRef.current += vyAccelRef.current * dt;
+        // Natural decay: half-life ~0.4s so spin fades between hits
+        vyAccelRef.current *= Math.exp(-2.2 * dt);
+        // Cap: garante que |Vx| >= 25% da velocidade total (evita trajectória vertical)
+        const totalSpeed = Math.hypot(vxRef.current, vyRef.current);
+        if (totalSpeed > 0) {
+          const maxVy = totalSpeed * 0.968;
+          if (Math.abs(vyRef.current) > maxVy) {
+            vyRef.current = Math.sign(vyRef.current) * maxVy;
+          }
+        }
+      }
+      // Magnetism: dampen Vy toward horizontal over time
+      if (magnetRef?.current) {
+        vyRef.current *= Math.pow(0.04, dt); // half-life ~0.17s — pulls trajectory toward horizontal
+      }
 
       const maxX = window.innerWidth - sizeRef.current.w;
       const maxY = window.innerHeight - sizeRef.current.h;
       const nextX = posRef.current.x + vxRef.current * dt;
       const nextY = posRef.current.y + vyRef.current * dt;
+
+      if (nextY >= maxY) {
+        vyRef.current = -Math.abs(vyRef.current);
+        if (vyAccelRef) vyAccelRef.current *= -0.4;
+      }
+      if (nextY <= 0) {
+        vyRef.current = Math.abs(vyRef.current);
+        if (vyAccelRef) vyAccelRef.current *= -0.4;
+      }
 
       if (nextX >= maxX) {
         // Golo direito — sem side-effects dentro do setPos updater
@@ -60,8 +106,7 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
         posRef.current = { x: cx, y: cy };
         if (onGoalRef.current) onGoalRef.current("player2");
       } else {
-        if (nextY >= maxY) vyRef.current = -Math.abs(vyRef.current);
-        if (nextY <= 0)    vyRef.current =  Math.abs(vyRef.current);
+        // wall bounce handled above
         posRef.current = {
           x: Math.min(Math.max(nextX, 0), maxX),
           y: Math.min(Math.max(nextY, 0), maxY),

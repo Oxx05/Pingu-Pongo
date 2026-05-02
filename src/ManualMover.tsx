@@ -14,6 +14,8 @@ type ManualMoverProps = {
   touchZone?: "left" | "right";
   frozen?: boolean;
   inverted?: boolean;
+  driftForce?: number;
+  paused?: boolean;
   children: React.ReactNode;
 };
 
@@ -29,6 +31,8 @@ export default function ManualMover({
   touchZone,
   frozen = false,
   inverted = false,
+  driftForce = 0,
+  paused = false,
   children,
 }: ManualMoverProps) {
   // vRef: sempre tem o valor mais recente de v, sem re-criar o RAF
@@ -41,8 +45,15 @@ export default function ManualMover({
   const invertedRef = useRef(inverted);
   useEffect(() => { invertedRef.current = inverted; }, [inverted]);
 
+  const pausedRef = useRef(paused);
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
+
+  const driftRef = useRef(driftForce);
+  useEffect(() => { driftRef.current = driftForce; }, [driftForce]);
+
   const posYRef = useRef(initialY);
   const sizeRef = useRef({ w: 0, h: elementHeight ?? 0 });
+  const prevElementHeightRef = useRef(elementHeight ?? 0);
   const elRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastRef = useRef<number | null>(null);
@@ -50,7 +61,20 @@ export default function ManualMover({
   onVelocityChangeRef.current = onVelocityChange;
 
   useEffect(() => {
-    if (elementHeight !== undefined) sizeRef.current.h = elementHeight;
+    if (elementHeight === undefined) return;
+    const oldH = prevElementHeightRef.current;
+    const newH = elementHeight;
+    sizeRef.current.h = newH;
+    prevElementHeightRef.current = newH;
+    // Reposition so that the center of the paddle stays at the same Y
+    if (oldH > 0 && oldH !== newH) {
+      const center = posYRef.current + oldH / 2;
+      const newTop = Math.max(0, Math.min(window.innerHeight - newH, center - newH / 2));
+      posYRef.current = newTop;
+      if (elRef.current) {
+        elRef.current.style.transform = `translate3d(0,${Math.round(newTop)}px,0)`;
+      }
+    }
   }, [elementHeight]);
 
   useEffect(() => {
@@ -127,6 +151,12 @@ export default function ManualMover({
       const dt = Math.min((t - lastRef.current) / 1000, 0.05);
       lastRef.current = t;
 
+      if (pausedRef.current) {
+        lastRef.current = t;
+        rafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
       const h = sizeRef.current.h;
       const maxY = window.innerHeight - h;
       const minY = 0;
@@ -139,7 +169,11 @@ export default function ManualMover({
         const goingDown = invertedRef.current ? keyUpRef.current  : keyDownRef.current;
 
         if (touchYRef.current !== null) {
-          nextY = Math.max(minY, Math.min(maxY, touchYRef.current - h / 2));
+          // Move em direcção ao dedo à velocidade do player (não teleporte)
+          const target = Math.max(minY, Math.min(maxY, touchYRef.current - h / 2));
+          const diff = target - prevY;
+          const maxMove = vRef.current * dt;
+          nextY = prevY + Math.max(-maxMove, Math.min(maxMove, diff));
         } else if (goingUp && !goingDown) {
           nextY = Math.max(prevY - vRef.current * dt, minY);
         } else if (goingDown && !goingUp) {
@@ -147,12 +181,17 @@ export default function ManualMover({
         }
       }
 
+      // Apply drift (enemy panic effect — player still has control but fights a constant force)
+      if (driftRef.current !== 0) {
+        nextY = Math.max(minY, Math.min(maxY, nextY + driftRef.current * dt));
+      }
+
       if (nextY !== prevY) {
         posYRef.current = nextY;
         if (elRef.current) {
           elRef.current.style.transform = `translate3d(0,${Math.round(nextY)}px,0)`;
         }
-        if (onVelocityChangeRef.current) onVelocityChangeRef.current(nextY - prevY);
+        if (onVelocityChangeRef.current) onVelocityChangeRef.current((nextY - prevY) / dt);
       }
 
       rafRef.current = requestAnimationFrame(tick);
@@ -175,7 +214,7 @@ export default function ManualMover({
         position: "fixed",
         left: initialX,
         top: 0,
-        transform: `translate3d(0,${initialY}px,0)`,
+        transform: `translate3d(0,${Math.round(posYRef.current)}px,0)`,
         willChange: "transform",
         touchAction: "none",
       }}

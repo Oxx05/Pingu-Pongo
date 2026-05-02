@@ -1,9 +1,12 @@
 "use client";
 
-import { Shuffle, Gauge, TimerReset, Crosshair, Expand, Rabbit, Shield, Trophy, Snowflake, Zap, Flame, Maximize2, ArrowUpDown, type LucideIcon } from "lucide-react";
+import { useState } from "react";
+import { Shuffle, Gauge, TimerReset, Expand, Rabbit, Turtle, Shield, Trophy, Snowflake, Zap, Flame, Maximize2, Minimize2, MoveVertical, Scissors, Undo2, EyeOff, ArrowUpDown, Ghost, AlertCircle, Activity, ArrowLeftRight, Bomb, Magnet, TrendingUp, type LucideIcon } from "lucide-react";
+import type { GameConfig } from "./gameTypes.ts";
+import { DEFAULT_CONFIG } from "./gameTypes.ts";
 
 type MenuProps = {
-  onPlay: () => void;
+  onPlay: (config: GameConfig) => void;
 };
 
 type ItemInfo = {
@@ -14,25 +17,44 @@ type ItemInfo = {
 };
 
 const ITEMS: ItemInfo[] = [
+  // Neutral
   { icon: Shuffle,    color: "#ffd43b", name: "Direção Aleatória",  desc: "A bola muda de direção" },
   { icon: Gauge,      color: "#74c0fc", name: "Velocidade Aleatória",desc: "A velocidade da bola muda" },
-  { icon: TimerReset, color: "#91a7ff", name: "Câmara Lenta",       desc: "A bola abranda por 2.5s" },
-  { icon: Crosshair,  color: "#fcc419", name: "Impulso",            desc: "Dá um empurrão extra à bola" },
-  { icon: Expand,     color: "#4dabf7", name: "Barra Maior",        desc: "A tua barra fica maior" },
-  { icon: Expand,     color: "#ff6b6b", name: "Inimigo Menor",      desc: "A barra do inimigo encolhe" },
-  { icon: Shield,     color: "#63e6be", name: "Escudo",             desc: "Bloqueia uma vez a bola" },
-  { icon: Trophy,     color: "#fab005", name: "Golo Duplo",         desc: "Próximo golo vale 2 pontos" },
-  { icon: Rabbit,     color: "#9775fa", name: "Turbo",              desc: "Pequeno aumento de velocidade" },
-  { icon: Maximize2,  color: "#f5a623", name: "Bola Gigante",       desc: "A bola fica enorme por 6s" },
-  { icon: Snowflake,  color: "#a8d8f0", name: "Gelo",               desc: "Inimigo fica imóvel por 2.8s" },
-  { icon: ArrowUpDown,color: "#f472b6", name: "Inversão",           desc: "Controlos do inimigo invertem por 5s" },
+  { icon: TimerReset, color: "#91a7ff", name: "Câmara Lenta",       desc: "A bola abranda por 4s" },
+  { icon: Undo2,      color: "#ffd43b", name: "Recuo",              desc: "Inverte a direção horizontal da bola" },
+  // Positivos (azul/verde — ajudam o teu lado)
+  { icon: Expand,     color: "#4dabf7", name: "Barra Maior",        desc: "A tua barra fica maior por 9s" },
+  { icon: MoveVertical,color: "#4dabf7",name: "Mega Barra",         desc: "A tua barra fica enorme por 4s" },
+  { icon: Rabbit,     color: "#51cf66", name: "Lebre",              desc: "A tua velocidade aumenta por 7s" },
+  { icon: Shield,     color: "#63e6be", name: "Escudo",             desc: "Bloqueia uma vez a bola por 8s" },
+  { icon: Trophy,     color: "#fab005", name: "Golo Duplo",         desc: "Próximo golo vale 2 pontos por 10s" },
+  { icon: Maximize2,  color: "#4dabf7", name: "Bola Gigante",       desc: "A bola fica enorme por 6s" },
+  { icon: Minimize2,  color: "#51cf66", name: "Mini Bola",          desc: "A bola fica minúscula por 5s" },
   { icon: Zap,        color: "#c0eb75", name: "Teletransporte",     desc: "A bola salta para posição aleatória" },
-  { icon: Flame,      color: "#ff7b54", name: "Turbine",            desc: "A bola acelera para velocidade máxima" },
+  { icon: Flame,      color: "#ff9f43", name: "Turbine",            desc: "A bola acelera para velocidade máxima" },
+  { icon: EyeOff,        color: "#c0eb75", name: "Bola Fantasma",   desc: "A bola fica quase invisível por 5s" },
+  { icon: Ghost,         color: "#ffd43b", name: "Eco",             desc: "Spawna 3 bolas falsas e esconde a real por 4.5s" },
+  { icon: Magnet,        color: "#51cf66", name: "Íman",            desc: "Puxa a bola para trajectória horizontal por 5s" },
+  { icon: TrendingUp,    color: "#ff7b54", name: "Bola de Fogo",    desc: "Cada pancada acelera a bola por 6s" },
+  { icon: ArrowLeftRight,color: "#74c0fc", name: "Trocar Itens",    desc: "Troca os itens dos dois jogadores" },
+  // Neutro extra
+  { icon: Activity,      color: "#74c0fc", name: "Distorção",       desc: "Alterna velocidade alta/baixa a cada 0.48s por 6s" },
+  // Negativos (vermelho — afetam o inimigo)
+  { icon: Expand,        color: "#ff6b6b", name: "Inimigo Menor",   desc: "A barra do inimigo encolhe por 9s" },
+  { icon: Turtle,        color: "#ff6b6b", name: "Tartaruga",       desc: "O inimigo abranda por 8s" },
+  { icon: Snowflake,     color: "#ff4757", name: "Gelo",            desc: "Inimigo fica imóvel por 2.8s" },
+  { icon: ArrowUpDown,   color: "#ff6348", name: "Inversão",        desc: "Controlos do inimigo invertem por 5s" },
+  { icon: Scissors,      color: "#ff6b6b", name: "Ladrão",          desc: "Destrói os itens do inimigo" },
+  { icon: AlertCircle,   color: "#ff6348", name: "Pânico",          desc: "Inimigo deriva para baixo constantemente por 5s" },
+  // Campo
+  { icon: Bomb,          color: "#ff4757", name: "Mina",            desc: "Spawna no campo — bola activa e dispara a alta velocidade" },
 ];
 
 const isTouchDevice = typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
 
 export default function Menu({ onPlay }: MenuProps) {
+  const [config, setConfig] = useState<GameConfig>(DEFAULT_CONFIG);
+
   return (
     <div style={styles.overlay}>
       <div style={styles.container}>
@@ -44,9 +66,34 @@ export default function Menu({ onPlay }: MenuProps) {
         </div>
 
         {/* Botão Jogar */}
-        <button style={styles.playBtn} onClick={onPlay}>
+        <button style={styles.playBtn} onClick={() => onPlay(config)}>
           JOGAR
         </button>
+
+        {/* Configurações */}
+        <div style={styles.section}>
+          <div style={styles.sectionTitle}>CONFIGURAÇÕES</div>
+          <div style={styles.configTable}>
+            <ConfigRow label="GOLOS P/ GANHAR">
+              {([3, 5, 7, 0] as const).map(v => (
+                <OptionBtn key={v} active={config.goalsToWin === v} onClick={() => setConfig(c => ({ ...c, goalsToWin: v }))}>
+                  {v === 0 ? "∞" : String(v)}
+                </OptionBtn>
+              ))}
+            </ConfigRow>
+            <ConfigRow label="SPAWN DE ITENS">
+              {([{ label: "RÁPIDO", v: 3000 }, { label: "NORMAL", v: 8000 }, { label: "LENTO", v: 15000 }]).map(opt => (
+                <OptionBtn key={opt.v} active={config.spawnDelay === opt.v} onClick={() => setConfig(c => ({ ...c, spawnDelay: opt.v }))}>
+                  {opt.label}
+                </OptionBtn>
+              ))}
+            </ConfigRow>
+            <ConfigRow label="SPIN DA BOLA">
+              <OptionBtn active={config.spinEnabled} onClick={() => setConfig(c => ({ ...c, spinEnabled: true }))}>ON</OptionBtn>
+              <OptionBtn active={!config.spinEnabled} onClick={() => setConfig(c => ({ ...c, spinEnabled: false }))}>OFF</OptionBtn>
+            </ConfigRow>
+          </div>
+        </div>
 
         {/* Controlos */}
         <div style={styles.section}>
@@ -127,6 +174,38 @@ export default function Menu({ onPlay }: MenuProps) {
 
       </div>
     </div>
+  );
+}
+
+function ConfigRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={styles.configRow}>
+      <span style={styles.configLabel}>{label}</span>
+      <div style={styles.configBtns}>{children}</div>
+    </div>
+  );
+}
+
+function OptionBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: active ? "rgba(232,244,251,0.12)" : "transparent",
+        border: `1px solid ${active ? "rgba(232,244,251,0.5)" : "rgba(255,255,255,0.12)"}`,
+        color: active ? "#e8f4fb" : "rgba(255,255,255,0.35)",
+        fontFamily: "'Courier New', Courier, monospace",
+        fontSize: "0.78rem",
+        fontWeight: active ? "bold" : "normal",
+        letterSpacing: "0.08em",
+        padding: "5px 12px",
+        borderRadius: 4,
+        cursor: "pointer",
+        transition: "all 0.1s",
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -276,6 +355,30 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "0.9rem",
     color: "rgba(255,255,255,0.45)",
     fontFamily: "'Courier New', Courier, monospace",
+  },
+  configTable: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 10,
+  },
+  configRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    flexWrap: "wrap" as const,
+  },
+  configLabel: {
+    fontFamily: "'Courier New', Courier, monospace",
+    fontSize: "0.78rem",
+    color: "rgba(255,255,255,0.45)",
+    letterSpacing: "0.1em",
+    minWidth: 140,
+  },
+  configBtns: {
+    display: "flex",
+    gap: 6,
+    flexWrap: "wrap" as const,
   },
   itemsNote: {
     fontSize: "0.9rem",

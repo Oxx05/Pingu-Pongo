@@ -4,10 +4,11 @@ import React, { forwardRef } from "react";
 
 type BallProps = {
     radius: number;
+    ghost?: boolean;
 };
 
 const Bola = forwardRef<HTMLDivElement, BallProps>(
-    ({ radius = 20 }, ref) => (
+    ({ radius = 20, ghost = false }, ref) => (
         <div
             ref={ref}
             style={{
@@ -17,7 +18,9 @@ const Bola = forwardRef<HTMLDivElement, BallProps>(
                 borderRadius: "50%",
                 border: "1.5px solid #e8f4fb",
                 boxSizing: "border-box",
-                boxShadow: "0 0 8px rgba(200,235,255,0.28), 0 0 18px rgba(160,210,255,0.08)",
+                boxShadow: ghost ? "none" : "0 0 8px rgba(200,235,255,0.28), 0 0 18px rgba(160,210,255,0.08)",
+                opacity: ghost ? 0.08 : 1,
+                transition: "opacity 0.4s ease",
             }}
         ></div>
     )
