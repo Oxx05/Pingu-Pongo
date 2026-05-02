@@ -996,6 +996,7 @@ export default function Game() {
         itemSpawnTimeoutRef.current = null;
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameStarted]);
 
   useEffect(() => {
