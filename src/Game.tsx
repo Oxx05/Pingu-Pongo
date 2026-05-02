@@ -59,7 +59,7 @@ type ItemEntry = {
   onBallCollide?: () => void; // mines: activated on ball contact, not stored in slot
 };
 
-type Decoy = { id: string; x: number; y: number; radius: number };
+type Decoy = { id: string; x: number; y: number; radius: number; vx: number; vy: number };
 
 type SpawnedItem = ItemEntry & {
   instanceId: string;
@@ -150,7 +150,44 @@ export default function Game({ config: configProp, conn, onBack }: GameProps = {
   useEffect(() => { activeBuffsRef.current = activeBuffs; }, [activeBuffs]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   useEffect(() => { notificationsRef.current = notifications; }, [notifications]);
-  useEffect(() => { decoysRef.current = decoys; }, [decoys]);
+  // Decoy animation — move via DOM manipulation, bounce off walls
+  const decoyDataRef = useRef<Decoy[]>([]);
+  const decoyRafRef  = useRef<number | null>(null);
+  useEffect(() => {
+    if (decoys.length === 0) {
+      if (decoyRafRef.current !== null) { cancelAnimationFrame(decoyRafRef.current); decoyRafRef.current = null; }
+      decoyDataRef.current = [];
+      decoysRef.current    = [];
+      return;
+    }
+    decoyDataRef.current = decoys.map(d => ({ ...d }));
+    let lastT = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min((now - lastT) / 1000, 0.05);
+      lastT = now;
+      const cvw = window.innerWidth;
+      const cvh = window.innerHeight;
+      decoyDataRef.current = decoyDataRef.current.map(d => {
+        let { x, y, vx, vy, radius } = d;
+        x += vx * dt;  y += vy * dt;
+        if (x - radius < 0)   { x = radius;      vx =  Math.abs(vx); }
+        if (x + radius > cvw) { x = cvw - radius; vx = -Math.abs(vx); }
+        if (y - radius < 0)   { y = radius;       vy =  Math.abs(vy); }
+        if (y + radius > cvh) { y = cvh - radius;  vy = -Math.abs(vy); }
+        const el = document.getElementById(`decoy-${d.id}`);
+        if (el) el.style.transform = `translate3d(${Math.round(x - radius)}px,${Math.round(y - radius)}px,0)`;
+        return { ...d, x, y, vx, vy };
+      });
+      decoysRef.current = decoyDataRef.current;
+      decoyRafRef.current = requestAnimationFrame(tick);
+    };
+    decoyRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (decoyRafRef.current !== null) { cancelAnimationFrame(decoyRafRef.current); decoyRafRef.current = null; }
+      decoysRef.current = [];
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decoys.length]);
   const [isPortrait, setIsPortrait] = useState(() => window.innerWidth < window.innerHeight && window.innerWidth <= 900);
 
   type ShotData = { id: string; startX: number; startY: number; direction: 1 | -1; shooter: PlayerId };
@@ -561,23 +598,29 @@ export default function Game({ config: configProp, conn, onBack }: GameProps = {
   function echoItem(player: PlayerId) {
     const key = `echo:${player}`;
     if (timeoutByKeyRef.current[key]) return;
-    const newDecoys: Decoy[] = Array.from({ length: 3 }, (_, i) => ({
-      id: `decoy-${Date.now()}-${i}`,
-      x: 120 + Math.random() * Math.max(1, window.innerWidth - 240),
-      y: 80 + Math.random() * Math.max(1, window.innerHeight - 160),
-      radius: BALL_RADIUS,
-    }));
+    const speed = START_BALL_SPEED * 0.82;
+    const newDecoys: Decoy[] = Array.from({ length: 3 }, (_, i) => {
+      const angle = (Math.PI * 2 / 3) * i + Math.random() * 0.9;
+      return {
+        id: `decoy-${Date.now()}-${i}`,
+        x: window.innerWidth  * (0.25 + Math.random() * 0.5),
+        y: window.innerHeight * (0.2  + Math.random() * 0.6),
+        radius: BALL_RADIUS,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+      };
+    });
     ghostCountRef.current++;
     setBallGhost(true);
     setDecoys(newDecoys);
-    addBuff(key, "ECO", Ghost, "#ffd43b", player, 4500);
+    addBuff(key, "ECO", Ghost, "#ffd43b", player, 8000);
     notify("👁 ECO — qual é a real?", "#ffd43b", opposite(player));
     timeoutByKeyRef.current[key] = window.setTimeout(() => {
       setDecoys([]);
       ghostCountRef.current--;
       if (ghostCountRef.current === 0) setBallGhost(false);
       timeoutByKeyRef.current[key] = null;
-    }, 4500);
+    }, 8000);
   }
 
   function magnetItem(player: PlayerId) {
@@ -995,6 +1038,7 @@ export default function Game({ config: configProp, conn, onBack }: GameProps = {
       const base = configRef.current.spawnDelay;
       const delay = base + Math.random() * base * 0.5;
       itemSpawnTimeoutRef.current = window.setTimeout(() => {
+        if (winnerRef.current !== null) return;
         if (window.innerWidth > 0 && window.innerHeight > 0) {
           const entryPool = itemPoolRef.current;
           const entry = entryPool[Math.floor(Math.random() * entryPool.length)];
@@ -1488,7 +1532,11 @@ export default function Game({ config: configProp, conn, onBack }: GameProps = {
       ))}
 
       {decoys.map(d => (
-        <div key={d.id} style={{ position: "fixed", left: d.x - d.radius, top: d.y - d.radius, pointerEvents: "none", zIndex: 60 }}>
+        <div
+          key={d.id}
+          id={`decoy-${d.id}`}
+          style={{ position: "fixed", left: 0, top: 0, transform: `translate3d(${Math.round(d.x - d.radius)}px,${Math.round(d.y - d.radius)}px,0)`, willChange: "transform", pointerEvents: "none", zIndex: 60 }}
+        >
           <div style={{ width: d.radius * 2, height: d.radius * 2, borderRadius: "50%", backgroundColor: "#e8f4fb", border: "1.5px solid #e8f4fb", boxShadow: "0 0 8px rgba(200,235,255,0.28)", opacity: 0.9 }} />
         </div>
       ))}
