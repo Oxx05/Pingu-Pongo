@@ -95,7 +95,7 @@ export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
           <div style={styles.sectionTitle}>CONFIGURAÇÕES</div>
           <div style={styles.configCard}>
             <ConfigRow label="GOLOS P/ GANHAR">
-              {([3, 5, 7, 0] as const).map(v => (
+              {([5, 10, 20, 0] as const).map(v => (
                 <OptionBtn key={v} active={config.goalsToWin === v} onClick={() => setConfig(c => ({ ...c, goalsToWin: v }))}>
                   {v === 0 ? "∞" : String(v)}
                 </OptionBtn>

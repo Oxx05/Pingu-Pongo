@@ -10,12 +10,13 @@ type AutoMoverProps = {
   onGoal?: (scored: "player1" | "player2") => void;
   teleportY?: number | null;
   vyAccelRef?: { current: number };
-  magnetRef?: { current: boolean };
+  magnetRef?: { current: "player1" | "player2" | null };
+  maxSpeedRef?: { current: number };
   paused?: boolean;
   children: React.ReactNode;
 };
 
-export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, onGoal, teleportY, vyAccelRef, magnetRef, paused = false, children }: AutoMoverProps) {
+export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, onGoal, teleportY, vyAccelRef, magnetRef, maxSpeedRef, paused = false, children }: AutoMoverProps) {
   const posRef = useRef({ x: initialX, y: initialY });
   const sizeRef = useRef({ w: 0, h: 0 });
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -62,21 +63,45 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
 
       // Aplicar spin (aceleração em Y impartida pela barra)
       if (vyAccelRef) {
+        const speedBefore = Math.hypot(vxRef.current, vyRef.current);
         vyRef.current += vyAccelRef.current * dt;
-        // Natural decay: half-life ~0.4s so spin fades between hits
-        vyAccelRef.current *= Math.exp(-2.2 * dt);
-        // Cap: garante que |Vx| >= 25% da velocidade total (evita trajectória vertical)
-        const totalSpeed = Math.hypot(vxRef.current, vyRef.current);
-        if (totalSpeed > 0) {
-          const maxVy = totalSpeed * 0.968;
-          if (Math.abs(vyRef.current) > maxVy) {
-            vyRef.current = Math.sign(vyRef.current) * maxVy;
-          }
+        vyAccelRef.current *= Math.exp(-1.2 * dt);
+        // Preserve total speed: spin curves the trajectory, doesn't accelerate/decelerate
+        const speedAfter = Math.hypot(vxRef.current, vyRef.current);
+        if (speedAfter > 0 && speedBefore > 0) {
+          const rescale = speedBefore / speedAfter;
+          vxRef.current *= rescale;
+          vyRef.current *= rescale;
+        }
+        // Near-vertical cap: prevent fully vertical trajectory (maintains speed)
+        const maxVy = speedBefore * 0.968;
+        if (Math.abs(vyRef.current) > maxVy) {
+          vyRef.current = Math.sign(vyRef.current) * maxVy;
+          vxRef.current = Math.sign(vxRef.current || 1) * Math.sqrt(Math.max(0, speedBefore ** 2 - maxVy ** 2));
         }
       }
-      // Magnetism: dampen Vy toward horizontal over time
+
+      // Speed cap (slow-motion enforces its multiplier regardless of other buffs)
+      if (maxSpeedRef && isFinite(maxSpeedRef.current) && maxSpeedRef.current > 0) {
+        const cur = Math.hypot(vxRef.current, vyRef.current);
+        if (cur > maxSpeedRef.current) {
+          vxRef.current = vxRef.current / cur * maxSpeedRef.current;
+          vyRef.current = vyRef.current / cur * maxSpeedRef.current;
+        }
+      }
+
+      // Magnetism: only pull vy toward 0 (no vx compensation — speed decreases naturally)
+      // Also dampens spin so they don't fight each other
       if (magnetRef?.current) {
-        vyRef.current *= Math.pow(0.04, dt); // half-life ~0.17s — pulls trajectory toward horizontal
+        const activator = magnetRef.current;
+        const headingAtPlayer =
+          (activator === "player1" && vxRef.current < 0) ||
+          (activator === "player2" && vxRef.current > 0);
+        if (headingAtPlayer) {
+          const factor = Math.pow(0.4, dt); // half-life ~0.9s
+          vyRef.current *= factor;
+          if (vyAccelRef) vyAccelRef.current *= factor; // prevent spin fighting magnet
+        }
       }
 
       const maxX = window.innerWidth - sizeRef.current.w;

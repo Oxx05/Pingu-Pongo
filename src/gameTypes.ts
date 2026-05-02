@@ -5,7 +5,7 @@ export type GameConfig = {
 };
 
 export const DEFAULT_CONFIG: GameConfig = {
-  goalsToWin: 5,
-  spawnDelay: 8000,
+  goalsToWin: 10,
+  spawnDelay: 3000,
   spinEnabled: true,
 };

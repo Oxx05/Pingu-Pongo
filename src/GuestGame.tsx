@@ -84,12 +84,35 @@ export default function GuestGame({ conn, onBack }: { conn: DataConnection; onBa
   // P2 input state
   const inputRef = useRef({ up: false, down: false });
 
-  // Send continuous input changes to host
+  // Send continuous input changes to host (also polls gamepad 0)
   useEffect(() => {
     let prev = { up: false, down: false };
+    const prevGpBtn = [false, false, false, false, false];
     let rafId: number;
     const tick = () => {
-      const cur = inputRef.current;
+      // Sample gamepad — first connected controller (index 0)
+      let gpUp = false, gpDown = false;
+      const gp = navigator.getGamepads ? navigator.getGamepads()[0] : null;
+      if (gp) {
+        const ax1 = gp.axes[1] ?? 0;
+        gpUp   = ax1 < -0.3 || (gp.buttons[12]?.pressed ?? false);
+        gpDown = ax1 >  0.3 || (gp.buttons[13]?.pressed ?? false);
+        // Rising-edge: shoot = button 0 (Cross/A / OK)
+        //              rotate = button 1 (Circle/B) or 2 (Square/X) or shoulders 4/5
+        const cb = [
+          gp.buttons[0]?.pressed ?? false,
+          gp.buttons[1]?.pressed ?? false,
+          gp.buttons[2]?.pressed ?? false,
+          gp.buttons[4]?.pressed ?? false,
+          gp.buttons[5]?.pressed ?? false,
+        ];
+        if (cb[0] && !prevGpBtn[0]) sendAction("shoot");
+        if ((cb[1] && !prevGpBtn[1]) || (cb[2] && !prevGpBtn[2]) || (cb[3] && !prevGpBtn[3]) || (cb[4] && !prevGpBtn[4])) sendAction("rotate");
+        for (let i = 0; i < cb.length; i++) prevGpBtn[i] = cb[i];
+      }
+
+      // Merge: keyboard/touch state OR gamepad
+      const cur = { up: inputRef.current.up || gpUp, down: inputRef.current.down || gpDown };
       if (cur.up !== prev.up || cur.down !== prev.down) {
         const msg: InputMsg = { type: "input", up: cur.up, down: cur.down };
         try { conn.send(msg); } catch {}
@@ -99,7 +122,7 @@ export default function GuestGame({ conn, onBack }: { conn: DataConnection; onBa
     };
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, [conn]);
+  }, [conn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sendAction = (action: "shoot" | "rotate") => {
     const msg: ActionMsg = { type: "action", action };
@@ -256,12 +279,20 @@ export default function GuestGame({ conn, onBack }: { conn: DataConnection; onBa
         {state.buffs.filter(b => b.player === "player2").map(b => <GuestBuffBar key={`${b.key}-${b.startedAt}`} buff={b} align="right" />)}
       </div>
 
-      {/* Notifications */}
-      {state.notifs.map(n => (
-        <div key={n.id} className="skill-notif" style={{ position: "fixed", top: "38%", ...(n.player === "player1" ? { left: "8%" } : { right: "8%" }), fontFamily: "'Courier New', Courier, monospace", fontSize: "clamp(0.85rem, 2vw, 1.15rem)", fontWeight: "bold", color: n.color, textShadow: `0 0 18px ${n.color}88`, letterSpacing: "0.12em", pointerEvents: "none", zIndex: 40, whiteSpace: "nowrap" }}>
-          {n.text}
-        </div>
-      ))}
+      {/* Notifications — agrupadas por jogador */}
+      {(["player1", "player2"] as const).map(player => {
+        const pNotifs = state.notifs.filter(n => n.player === player);
+        if (pNotifs.length === 0) return null;
+        return (
+          <div key={player} style={{ position: "fixed", top: "35%", ...(player === "player1" ? { left: "8%" } : { right: "8%" }), display: "flex", flexDirection: "column", gap: 6, pointerEvents: "none", zIndex: 40 }}>
+            {pNotifs.map(n => (
+              <div key={n.id} className="skill-notif" style={{ fontFamily: "'Courier New', Courier, monospace", fontSize: "clamp(0.85rem, 2vw, 1.15rem)", fontWeight: "bold", color: n.color, textShadow: `0 0 18px ${n.color}88`, letterSpacing: "0.12em", whiteSpace: "nowrap" }}>
+                {n.text}
+              </div>
+            ))}
+          </div>
+        );
+      })}
 
       {/* Winner overlay */}
       {state.winner && (

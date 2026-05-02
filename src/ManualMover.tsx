@@ -18,6 +18,8 @@ type ManualMoverProps = {
   paused?: boolean;
   /** When provided, overrides keyboard + touch for movement (online guest inputs) */
   externalInput?: { current: { up: boolean; down: boolean } } | null;
+  /** Index into navigator.getGamepads() — enables gamepad/controller input */
+  gamepadIndex?: number;
   children: React.ReactNode;
 };
 
@@ -36,6 +38,7 @@ export default function ManualMover({
   driftForce = 0,
   paused = false,
   externalInput = null,
+  gamepadIndex,
   children,
 }: ManualMoverProps) {
   // vRef: sempre tem o valor mais recente de v, sem re-criar o RAF
@@ -62,6 +65,20 @@ export default function ManualMover({
   const lastRef = useRef<number | null>(null);
   const onVelocityChangeRef = useRef(onVelocityChange);
   onVelocityChangeRef.current = onVelocityChange;
+
+  const onShootRef = useRef(onShoot);
+  onShootRef.current = onShoot;
+  const onRotateRef = useRef(onRotate);
+  onRotateRef.current = onRotate;
+
+  const gamepadIndexRef = useRef(gamepadIndex ?? -1);
+  useEffect(() => { gamepadIndexRef.current = gamepadIndex ?? -1; }, [gamepadIndex]);
+  // Gamepad movement state (merged with keyboard in RAF tick)
+  const gpUpRef = useRef(false);
+  const gpDownRef = useRef(false);
+  // Track previous button states for rising-edge detection (shoot / rotate)
+  // slots: [b0, b1, b2, b4, b5]
+  const prevGpButtonsRef = useRef([false, false, false, false, false]);
 
   useEffect(() => {
     if (elementHeight === undefined) return;
@@ -166,6 +183,36 @@ export default function ManualMover({
       const prevY = posYRef.current;
       let nextY = prevY;
 
+      // Poll gamepad (PS4/Xbox/TV remote) — only when not in externalInput mode
+      if (!externalInput && gamepadIndexRef.current >= 0) {
+        const gp = navigator.getGamepads ? navigator.getGamepads()[gamepadIndexRef.current] : null;
+        if (gp) {
+          const ax1    = gp.axes[1] ?? 0;
+          const b12    = gp.buttons[12]?.pressed ?? false; // D-pad up
+          const b13    = gp.buttons[13]?.pressed ?? false; // D-pad down
+          gpUpRef.current   = ax1 < -0.3 || b12;
+          gpDownRef.current = ax1 >  0.3 || b13;
+
+          // Rising-edge: shoot = button 0 (Cross/A / OK)
+          //              rotate = button 1 (Circle/B / Back) OR button 2 (Square/X)
+          //              also shoulder buttons: 4 (L1/LB) and 5 (R1/RB) for rotate
+          const cur = [
+            gp.buttons[0]?.pressed ?? false,
+            gp.buttons[1]?.pressed ?? false,
+            gp.buttons[2]?.pressed ?? false,
+            gp.buttons[4]?.pressed ?? false,
+            gp.buttons[5]?.pressed ?? false,
+          ];
+          const prev = prevGpButtonsRef.current;
+          if (cur[0] && !prev[0]) onShootRef.current?.();
+          if ((cur[1] && !prev[1]) || (cur[2] && !prev[2]) || (cur[3] && !prev[3]) || (cur[4] && !prev[4])) onRotateRef.current?.();
+          prevGpButtonsRef.current = cur;
+        } else {
+          gpUpRef.current   = false;
+          gpDownRef.current = false;
+        }
+      }
+
       if (!frozenRef.current) {
         if (externalInput) {
           // Online mode: use remote player inputs, ignore local keyboard/touch
@@ -180,9 +227,9 @@ export default function ManualMover({
           const maxMove = vRef.current * dt;
           nextY = prevY + Math.max(-maxMove, Math.min(maxMove, diff));
         } else {
-          // invertedRef: troca up↔down
-          const goingUp   = invertedRef.current ? keyDownRef.current : keyUpRef.current;
-          const goingDown = invertedRef.current ? keyUpRef.current  : keyDownRef.current;
+          // Keyboard merged with gamepad
+          const goingUp   = invertedRef.current ? (keyDownRef.current || gpDownRef.current) : (keyUpRef.current || gpUpRef.current);
+          const goingDown = invertedRef.current ? (keyUpRef.current || gpUpRef.current)     : (keyDownRef.current || gpDownRef.current);
           if (goingUp && !goingDown)   nextY = Math.max(prevY - vRef.current * dt, minY);
           else if (goingDown && !goingUp) nextY = Math.min(prevY + vRef.current * dt, maxY);
         }
