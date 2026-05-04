@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Shuffle, Gauge, TimerReset, Expand, Rabbit, Turtle, Shield, Trophy, Snowflake, Zap, Flame, Maximize2, Minimize2, MoveVertical, Scissors, Undo2, EyeOff, ArrowUpDown, Ghost, AlertCircle, Activity, ArrowLeftRight, Bomb, Magnet, TrendingUp, type LucideIcon } from "lucide-react";
-import type { GameConfig } from "./gameTypes.ts";
+import type { GameConfig, GameMode } from "./gameTypes.ts";
 import { DEFAULT_CONFIG } from "./gameTypes.ts";
 
 type MenuProps = {
@@ -94,17 +94,49 @@ export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
         <div style={styles.section}>
           <div style={styles.sectionTitle}>CONFIGURAÇÕES</div>
           <div style={styles.configCard}>
-            <ConfigRow label="GOLOS P/ GANHAR">
-              {([5, 10, 20, 0] as const).map(v => (
-                <OptionBtn key={v} active={config.goalsToWin === v} onClick={() => setConfig(c => ({ ...c, goalsToWin: v }))}>
-                  {v === 0 ? "∞" : String(v)}
+            <ConfigRow label="MODO">
+              {(["pong", "rally", "solo"] as GameMode[]).map(m => (
+                <OptionBtn key={m} active={config.mode === m} onClick={() => setConfig(c => ({ ...c, mode: m }))}>
+                  {m === "pong" ? "PONG" : m === "rally" ? "RALLY" : "SOLO"}
+                </OptionBtn>
+              ))}
+            </ConfigRow>
+            {config.mode === "pong" && (
+              <>
+                <div style={styles.configDivider} />
+                <ConfigRow label="GOLOS P/ GANHAR">
+                  {([5, 10, 20, 0] as const).map(v => (
+                    <OptionBtn key={v} active={config.goalsToWin === v} onClick={() => setConfig(c => ({ ...c, goalsToWin: v }))}>
+                      {v === 0 ? "∞" : String(v)}
+                    </OptionBtn>
+                  ))}
+                </ConfigRow>
+              </>
+            )}
+            {(config.mode === "pong" || config.mode === "rally") && (
+              <>
+                <div style={styles.configDivider} />
+                <ConfigRow label="SPAWN DE ITENS">
+                  {([{ label: "RÁPIDO", v: 3000 }, { label: "NORMAL", v: 8000 }, { label: "LENTO", v: 15000 }]).map(opt => (
+                    <OptionBtn key={opt.v} active={config.spawnDelay === opt.v} onClick={() => setConfig(c => ({ ...c, spawnDelay: opt.v }))}>
+                      {opt.label}
+                    </OptionBtn>
+                  ))}
+                </ConfigRow>
+              </>
+            )}
+            <div style={styles.configDivider} />
+            <ConfigRow label="VELOCIDADE INICIAL">
+              {([{ label: "NORMAL", v: 500 }, { label: "MÉDIA", v: 650 }, { label: "RÁPIDA", v: 850 }]).map(opt => (
+                <OptionBtn key={opt.v} active={config.initialSpeed === opt.v} onClick={() => setConfig(c => ({ ...c, initialSpeed: opt.v }))}>
+                  {opt.label}
                 </OptionBtn>
               ))}
             </ConfigRow>
             <div style={styles.configDivider} />
-            <ConfigRow label="SPAWN DE ITENS">
-              {([{ label: "RÁPIDO", v: 3000 }, { label: "NORMAL", v: 8000 }, { label: "LENTO", v: 15000 }]).map(opt => (
-                <OptionBtn key={opt.v} active={config.spawnDelay === opt.v} onClick={() => setConfig(c => ({ ...c, spawnDelay: opt.v }))}>
+            <ConfigRow label="PROGRESSÃO">
+              {([{ label: "SEM", v: 0 }, { label: "LENTA", v: 0.04 }, { label: "RÁPIDA", v: 0.10 }]).map(opt => (
+                <OptionBtn key={opt.v} active={config.speedProgression === opt.v} onClick={() => setConfig(c => ({ ...c, speedProgression: opt.v }))}>
                   {opt.label}
                 </OptionBtn>
               ))}
@@ -123,28 +155,28 @@ export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
 
           {isTouchDevice ? (
             <div style={styles.touchHint}>
-              <div style={styles.touchHintText}>Desliza o dedo na tua metade do ecrã para mover a barra.</div>
+              <div style={styles.touchHintText}>Landscape: metade esquerda/direita. Portrait: metade cima/baixo.</div>
               <div style={styles.controlGrid}>
                 <ControlCard
-                  title="Jogador 1 — Esquerda"
+                  title="Jogador 1"
                   color="#56d1c4"
                   rows={[
-                    { key: "↕ Deslizar", action: "Mover barra" },
+                    { key: "↕↔ Deslizar", action: "Mover barra" },
                     { key: "[ USAR ]", action: "Usar item" },
                     { key: "[ TROCAR ]", action: "Trocar item" },
                   ]}
                 />
                 <ControlCard
-                  title="Jogador 2 — Direita"
+                  title="Jogador 2"
                   color="#f5895e"
                   rows={[
-                    { key: "↕ Deslizar", action: "Mover barra" },
+                    { key: "↕↔ Deslizar", action: "Mover barra" },
                     { key: "[ USAR ]", action: "Usar item" },
                     { key: "[ TROCAR ]", action: "Trocar item" },
                   ]}
                 />
               </div>
-              <div style={styles.landscapeHint}>Roda o telemóvel para landscape para melhor experiência</div>
+              <div style={styles.landscapeHint}>Funciona em portrait e landscape</div>
             </div>
           ) : (
             <div style={styles.controlGrid}>

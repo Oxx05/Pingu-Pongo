@@ -45,6 +45,34 @@ import {
 const isTouchDevice = typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
 const SLOW_FACTOR = 0.22;
 
+type Brick = { id: string; x: number; y: number; w: number; h: number; color: string };
+
+function initBricks(w: number, h: number): Brick[] {
+  const cols = 5, rows = 4;
+  const gap = 6;
+  const bw = Math.max(48, Math.floor(w * 0.075));
+  const bh = Math.max(20, Math.floor(h * 0.065));
+  const totalW = cols * bw + (cols - 1) * gap;
+  const totalH = rows * bh + (rows - 1) * gap;
+  const startX = Math.floor((w - totalW) / 2);
+  const startY = Math.floor((h - totalH) / 2);
+  const rowColors = ["#ff6b6b", "#ff9f43", "#ffd43b", "#51cf66"];
+  const bricks: Brick[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      bricks.push({
+        id: `${r}-${c}`,
+        x: startX + c * (bw + gap),
+        y: startY + r * (bh + gap),
+        w: bw,
+        h: bh,
+        color: rowColors[r],
+      });
+    }
+  }
+  return bricks;
+}
+
 type PlayerId = "player1" | "player2";
 
 type PlayerMapNumber = Record<PlayerId, number>;
@@ -56,7 +84,7 @@ type ItemEntry = {
   color: string;
   onCatch: (player: PlayerId) => void;
   canUse?: (player: PlayerId) => boolean;
-  onBallCollide?: () => void; // mines: activated on ball contact, not stored in slot
+  onBallCollide?: () => void;
 };
 
 type Decoy = { id: string; x: number; y: number; radius: number; vx: number; vy: number };
@@ -89,7 +117,7 @@ type Notification = {
 
 type GameProps = {
   config?: GameConfig;
-  conn?: DataConnection | null;   // provided → host mode
+  conn?: DataConnection | null;
   onBack?: () => void;
   p1GamepadIndex?: number;
   p2GamepadIndex?: number;
@@ -98,6 +126,7 @@ type GameProps = {
 export default function Game({ config: configProp, conn, onBack, p1GamepadIndex, p2GamepadIndex }: GameProps = {}) {
   const [config] = useState<GameConfig>(configProp ?? DEFAULT_CONFIG);
   const configRef = useRef(config);
+  const gameModeRef = useRef(config.mode);
   const [winner, setWinner] = useState<PlayerId | null>(null);
 
   const barra1Ref = useRef<HTMLDivElement>(null);
@@ -107,17 +136,23 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   const bolaRef = useRef<HTMLDivElement>(null);
   const barra1VyRef = useRef(0);
   const barra2VyRef = useRef(0);
+  const barra1VxRef = useRef(0);  // portrait mode spin
+  const barra2VxRef = useRef(0);
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const BALL_RADIUS = isTouchDevice ? Math.round(Math.min(14, vh * 0.02)) : Math.round(Math.min(20, vh * 0.028));
   const BALL_RADIUS_BIG = Math.round(BALL_RADIUS * 2.2);
   const BALL_RADIUS_MINI = Math.round(BALL_RADIUS * 0.45);
-  const START_BALL_SPEED = 500;
+  const START_BALL_SPEED = config.initialSpeed;
   const BASE_PADDLE_HEIGHT = isTouchDevice ? Math.round(Math.min(160, vh * 0.25)) : Math.round(Math.min(200, vh * 0.32));
   const BASE_PADDLE_WIDTH = isTouchDevice ? Math.round(Math.min(14, vh * 0.03)) : Math.round(Math.min(20, vh * 0.04));
   const ITEM_RADIUS = Math.round(Math.min(18, vh * 0.04));
   const PADDLE_OFFSET = Math.round(Math.min(100, Math.max(36, vw * 0.08)));
+  // Portrait dimensions
+  const PORT_PADDLE_W = Math.round(Math.min(130, vw * 0.33));
+  const PORT_PADDLE_H = Math.round(Math.min(14, vw * 0.038));
+  const PORT_PAD_OFF = Math.round(Math.min(60, vh * 0.08));
 
   const [score, setScore] = useState([0, 0]);
   const scoreRef = useRef([0, 0]);
@@ -137,8 +172,12 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   const [decoys, setDecoys] = useState<Decoy[]>([]);
   const [teleportY, setTeleportY] = useState<number | null>(null);
   const [ballGhost, setBallGhost] = useState(false);
+  const rallyHitsRef = useRef(0);
+  const [rallyHits, setRallyHits] = useState(0);
+  // Solo bricks
+  const bricksRef = useRef<Brick[]>(config.mode === "solo" ? initBricks(vw, vh) : []);
+  const [bricks, setBricks] = useState<Brick[]>(() => config.mode === "solo" ? initBricks(vw, vh) : []);
 
-  // Mirrors for swap + host state sync
   useEffect(() => { current1Ref.current = current1; }, [current1]);
   useEffect(() => { current2Ref.current = current2; }, [current2]);
   useEffect(() => { next1Ref.current = next1; }, [next1]);
@@ -152,7 +191,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   useEffect(() => { activeBuffsRef.current = activeBuffs; }, [activeBuffs]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   useEffect(() => { notificationsRef.current = notifications; }, [notifications]);
-  // Decoy animation — move via DOM manipulation, bounce off walls
+
   const decoyDataRef = useRef<Decoy[]>([]);
   const decoyRafRef  = useRef<number | null>(null);
   useEffect(() => {
@@ -172,9 +211,9 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       decoyDataRef.current = decoyDataRef.current.map(d => {
         let { x, y, vx, vy, radius } = d;
         x += vx * dt;  y += vy * dt;
-        if (x - radius < 0)   { x = radius;      vx =  Math.abs(vx); }
-        if (x + radius > cvw) { x = cvw - radius; vx = -Math.abs(vx); }
-        if (y - radius < 0)   { y = radius;       vy =  Math.abs(vy); }
+        if (x - radius < 0)   { x = radius;       vx =  Math.abs(vx); }
+        if (x + radius > cvw) { x = cvw - radius;  vx = -Math.abs(vx); }
+        if (y - radius < 0)   { y = radius;        vy =  Math.abs(vy); }
         if (y + radius > cvh) { y = cvh - radius;  vy = -Math.abs(vy); }
         const el = document.getElementById(`decoy-${d.id}`);
         if (el) el.style.transform = `translate3d(${Math.round(x - radius)}px,${Math.round(y - radius)}px,0)`;
@@ -190,7 +229,10 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [decoys.length]);
+
   const [isPortrait, setIsPortrait] = useState(() => window.innerWidth < window.innerHeight && window.innerWidth <= 900);
+  const isPortraitRef = useRef(isPortrait);
+  useEffect(() => { isPortraitRef.current = isPortrait; }, [isPortrait]);
 
   type ShotData = { id: string; startX: number; startY: number; direction: 1 | -1; shooter: PlayerId };
   const [shots, setShots] = useState<ShotData[]>([]);
@@ -220,7 +262,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   const itemPickupRafRef = useRef<number | null>(null);
   const activeItemsRef = useRef<SpawnedItem[]>([]);
 
-  // ── Host-mode refs (mirror state for the state-sync RAF) ────────────
   const guestInputRef   = useRef({ up: false, down: false });
   const ballGhostRef    = useRef(false);
   const winnerRef       = useRef<PlayerId | null>(null);
@@ -282,7 +323,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     }, durationMs);
   }
 
-  // Para efeitos que não usam setTimedEffect mas querem mostrar barra
   function addBuff(key: string, label: string, icon: LucideIcon, color: string, player: PlayerId, durationMs: number) {
     const prev = buffCleanupRef.current[key];
     if (prev) clearTimeout(prev);
@@ -305,7 +345,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   }
 
   function resetGame() {
-    // Clear all effect timeouts
     Object.keys(timeoutByKeyRef.current).forEach(k => {
       const id = timeoutByKeyRef.current[k];
       if (id !== null && id !== undefined) clearTimeout(id);
@@ -316,7 +355,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       if (id !== null && id !== undefined) clearTimeout(id);
       buffCleanupRef.current[k] = null;
     });
-    // Reset stacking counters and physics refs
     slowCountRef.current = 0;
     slowSavedSpeedRef.current = 0;
     slowSavedPlayerSpeedRef.current = { player1: 1, player2: 1 };
@@ -338,9 +376,21 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     prevBallCyRef.current = null;
     activeItemsRef.current = [];
     scoreRef.current = [0, 0];
-    // Reset ball velocity
+    rallyHitsRef.current = 0;
+    setRallyHits(0);
+    if (config.mode === "solo") {
+      const newBricks = initBricks(window.innerWidth, window.innerHeight);
+      bricksRef.current = newBricks;
+      setBricks(newBricks);
+    }
     setBallDirectionWithSpeed(START_BALL_SPEED);
-    // Reset all state
+    if (config.mode === "solo") {
+      if (isPortraitRef.current) {
+        VyRef.current = -Math.abs(VyRef.current); // portrait: go up toward bricks
+      } else {
+        VxRef.current = Math.abs(VxRef.current); // landscape: go right toward bricks
+      }
+    }
     setScore([0, 0]);
     setBallRadius(BALL_RADIUS);
     setGoalMultiplier({ player1: 1, player2: 1 });
@@ -365,6 +415,11 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   }
 
   function onGoal(scored: PlayerId) {
+    // Solo mode: ball missed = game over
+    if (gameModeRef.current === "solo") {
+      setWinner("player2");
+      return;
+    }
     const amount = goalMultiplier[scored];
     const newScore: [number, number] = scored === "player1"
       ? [scoreRef.current[0] + amount, scoreRef.current[1]]
@@ -372,7 +427,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     scoreRef.current = newScore;
     setScore(newScore);
     setGoalMultiplier(prev => ({ ...prev, [scored]: 1 }));
-    // Cancel distortion on goal
     for (const p of ["player1", "player2"] as PlayerId[]) {
       const dk = `distort:${p}`;
       const dt = timeoutByKeyRef.current[dk];
@@ -399,7 +453,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   }
 
   function setBallDirectionWithSpeed(speed: number) {
-    const minAbsCos = 0.3; // evita quase vertical
+    const minAbsCos = 0.3;
     let angle = 0;
     let cosAbs = 0;
 
@@ -421,7 +475,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     const speed = Math.hypot(VxRef.current, VyRef.current);
     setBallDirectionWithSpeed(speed);
   }
-
 
   function timerChange(player: PlayerId) {
     const key = `timer:${player}`;
@@ -448,6 +501,9 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         if (cur > 0) {
           VxRef.current = VxRef.current / cur * slowSavedSpeedRef.current;
           VyRef.current = VyRef.current / cur * slowSavedSpeedRef.current;
+        }
+        if (distortionIntervalRef.current !== null) {
+          distortionSavedSpeedRef.current = slowSavedSpeedRef.current;
         }
         setPlayerSpeedMultiplier(slowSavedPlayerSpeedRef.current);
       }
@@ -521,10 +577,11 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   function ghostBall(player: PlayerId) {
     const key = `ghost:${player}`;
+    const otherKey = `ghost:${opposite(player)}`;
     setTimedEffect(
       key, 5000,
-      () => { ghostCountRef.current++; setBallGhost(true); },
-      () => { ghostCountRef.current--; if (ghostCountRef.current === 0) setBallGhost(false); },
+      () => setBallGhost(true),
+      () => { if (!timeoutByKeyRef.current[otherKey]) setBallGhost(false); },
       { label: "FANTASMA", icon: Ghost, color: "#c0eb75", player }
     );
     notify("👁 BOLA FANTASMA", "#c0eb75", opposite(player));
@@ -543,21 +600,16 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   }
 
   function swapItems(player: PlayerId) {
-    // Called AFTER the slot has already been consumed by shoot1/shoot2,
-    // so we must not re-set the caller's current (it was already advanced).
-    // We just give each side what the other had.
     const c1 = current1Ref.current;
     const c2 = current2Ref.current;
     const n1 = next1Ref.current;
     const n2 = next2Ref.current;
     if (player === "player1") {
-      // player1 used the item — give player1 player2's slots, player2 gets player1's next
       setCurrent1(c2);
       setNext1(n2);
       setCurrent2(n1);
       setNext2(null);
     } else {
-      // player2 used the item — give player2 player1's slots, player1 gets player2's next
       setCurrent2(c1);
       setNext2(n1);
       setCurrent1(n2);
@@ -644,17 +696,18 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     setTimedEffect(
       key, 5000,
       () => { magnetRef.current = player; },
-      () => { magnetRef.current = null; },
+      () => { if (magnetRef.current === player) magnetRef.current = null; },
       { label: "ÍMAN", icon: Magnet, color: "#51cf66", player }
     );
   }
 
   function fireBallItem(player: PlayerId) {
     const key = `fire:${player}`;
+    const otherKey = `fire:${opposite(player)}`;
     setTimedEffect(
       key, 6000,
       () => { fireActiveRef.current = true; },
-      () => { fireActiveRef.current = false; },
+      () => { if (!timeoutByKeyRef.current[otherKey]) fireActiveRef.current = false; },
       { label: "FOGO", icon: TrendingUp, color: "#ff7b54", player }
     );
   }
@@ -700,9 +753,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     VxRef.current = -VxRef.current;
   }
 
-
-  // ── 5 novos efeitos ────────────────────────────────────────────────
-
   function bigBall(player: PlayerId) {
     const key = `bigball:${player}`;
     if (timeoutByKeyRef.current[key]) return;
@@ -736,7 +786,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     if (!barraRef.current) return;
     const rect = barraRef.current.getBoundingClientRect();
     const direction = player === "player1" ? 1 : -1 as 1 | -1;
-    // start from the front face of the paddle, vertically centered
     const startX = player === "player1" ? rect.right : rect.left - 48;
     const startY = rect.top + rect.height / 2;
     const id = `shot-${Date.now()}-${Math.random()}`;
@@ -796,12 +845,10 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   }
 
   const itemPool: ItemEntry[] = [
-    // Neutral
     { id: "random-direction", icon: Shuffle,      color: "#ffd43b", onCatch: ()  => randomDirection() },
     { id: "timer-change",     icon: TimerReset,   color: "#91a7ff", onCatch: (p) => timerChange(p) },
     { id: "reverse-x",        icon: Undo2,        color: "#ffd43b", onCatch: ()  => reverseX() },
     { id: "distortion",       icon: Activity,     color: "#74c0fc", onCatch: (p) => distortion(p) },
-    // Positive (blue/green — help self)
     { id: "size-blue",        icon: Expand,       color: "#4dabf7", onCatch: (p) => sizeBlue(p) },
     { id: "mega-barra",       icon: MoveVertical, color: "#4dabf7", onCatch: (p) => megaBarra(p) },
     { id: "speed-blue",       icon: Rabbit,       color: "#51cf66", onCatch: (p) => speedBlue(p) },
@@ -816,14 +863,12 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     { id: "magnet",           icon: Magnet,       color: "#51cf66", onCatch: (p) => magnetItem(p) },
     { id: "fire-ball",        icon: TrendingUp,   color: "#ff7b54", onCatch: (p) => fireBallItem(p) },
     { id: "swap-items",       icon: ArrowLeftRight,color: "#74c0fc",onCatch: (p) => swapItems(p) },
-    // Negative (red — hurt enemy)
     { id: "size-red",         icon: Expand,       color: "#ff6b6b", onCatch: (p) => sizeRed(p) },
     { id: "speed-red",        icon: Turtle,       color: "#ff6b6b", onCatch: (p) => speedRed(p) },
     { id: "freeze",           icon: Snowflake,    color: "#ff4757", onCatch: (p) => freeze(p) },
     { id: "invert",           icon: ArrowUpDown,  color: "#ff6348", onCatch: (p) => invertControls(p) },
     { id: "rob-item",         icon: Scissors,     color: "#ff6b6b", onCatch: (p) => robItem(p) },
     { id: "panic",            icon: AlertCircle,  color: "#ff6348", onCatch: (p) => panicItem(p) },
-    // Mine (field trap — not stored, activates on ball contact)
     { id: "mine",             icon: Bomb,         color: "#ff4757", onCatch: () => {},
       onBallCollide: () => triggerMine() },
   ];
@@ -848,14 +893,8 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   }
 
   function sweptFaceCrossing(
-    prevCx: number,
-    prevCy: number,
-    cx: number,
-    cy: number,
-    faceX: number,
-    yMin: number,
-    yMax: number,
-    approachingFromRight: boolean
+    prevCx: number, prevCy: number, cx: number, cy: number,
+    faceX: number, yMin: number, yMax: number, approachingFromRight: boolean
   ): number | null {
     const crossed = approachingFromRight ? prevCx >= faceX && cx < faceX : prevCx <= faceX && cx > faceX;
     if (!crossed) return null;
@@ -864,14 +903,20 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     return cyAtCross >= yMin && cyAtCross <= yMax ? cyAtCross : null;
   }
 
+  // Portrait: swept detection on Y face
+  function sweptFaceCrossingY(
+    prevCy: number, prevCx: number, cy: number, cx: number,
+    faceY: number, xMin: number, xMax: number, approachingFromAbove: boolean
+  ): number | null {
+    const crossed = approachingFromAbove ? prevCy <= faceY && cy > faceY : prevCy >= faceY && cy < faceY;
+    if (!crossed) return null;
+    const t = (faceY - prevCy) / (cy - prevCy);
+    const cxAtCross = prevCx + t * (cx - prevCx);
+    return cxAtCross >= xMin && cxAtCross <= xMax ? cxAtCross : null;
+  }
+
   function getCollisionSide(
-    cx: number,
-    cy: number,
-    r: number,
-    rx: number,
-    ry: number,
-    rw: number,
-    rh: number
+    cx: number, cy: number, r: number, rx: number, ry: number, rw: number, rh: number
   ): "front" | "topbottom" {
     const closestX = Math.max(rx, Math.min(cx, rx + rw));
     const closestY = Math.max(ry, Math.min(cy, ry + rh));
@@ -885,6 +930,14 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   useEffect(() => {
     setBallDirectionWithSpeed(START_BALL_SPEED);
+    if (config.mode === "solo") {
+      if (isPortrait) {
+        VyRef.current = -Math.abs(VyRef.current);
+      } else {
+        VxRef.current = Math.abs(VxRef.current);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -897,7 +950,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     };
   }, []);
 
-  useEffect(() => { isPausedRef.current = isPortrait || winner !== null; }, [isPortrait, winner]);
+  useEffect(() => { isPausedRef.current = winner !== null; }, [winner]);
 
   useEffect(() => {
     prevBallCxRef.current = null;
@@ -909,21 +962,19 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     }
 
     function applyFrontCollision(
-      cy: number,
-      barraCenterY: number,
-      barraHalfH: number,
-      barraVyRef: { current: number },
-      directionSign: 1 | -1
+      cy: number, barraCenterY: number, barraHalfH: number,
+      barraVyRef: { current: number }, directionSign: 1 | -1
     ) {
       const impact = Math.max(-1, Math.min(1, (cy - barraCenterY) / barraHalfH));
-      const fireMult = fireActiveRef.current ? 1.22 : 1.0;
-      const speed = Math.sqrt(VxRef.current ** 2 + VyRef.current ** 2) * fireMult;
+      const fireMult = fireActiveRef.current ? 1.38 : 1.0;
+      const baseSpeed = Math.sqrt(VxRef.current ** 2 + VyRef.current ** 2) * fireMult;
+      const progressionFactor = 1 + configRef.current.speedProgression;
+      const maxSpeed = configRef.current.initialSpeed * 2.5;
+      const speed = Math.min(baseSpeed * progressionFactor, maxSpeed);
       const angle = impact * (Math.PI / 3);
       VxRef.current = directionSign * Math.abs(speed * Math.cos(angle));
       VyRef.current = speed * Math.sin(angle) + barraVyRef.current * 0.008;
-      // Spin: barra desce → backspin → bola curva para cima (sinal invertido, como ping pong)
       vyAccelRef.current = configRef.current.spinEnabled ? -barraVyRef.current * 0.5 : 0;
-      // Clamp near-vertical: garante |Vx| >= 28% da velocidade total
       const totalSpeed = Math.hypot(VxRef.current, VyRef.current);
       if (totalSpeed > 0) {
         const minVx = totalSpeed * 0.28;
@@ -934,20 +985,37 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       }
     }
 
+    function applyFrontCollisionPortrait(
+      cx: number, barraCenterX: number, barraHalfW: number,
+      barraVxRef: { current: number }, goingUp: boolean
+    ) {
+      const impact = Math.max(-1, Math.min(1, (cx - barraCenterX) / barraHalfW));
+      const fireMult = fireActiveRef.current ? 1.38 : 1.0;
+      const baseSpeed = Math.sqrt(VxRef.current ** 2 + VyRef.current ** 2) * fireMult;
+      const progressionFactor = 1 + configRef.current.speedProgression;
+      const maxSpeed = configRef.current.initialSpeed * 2.5;
+      const speed = Math.min(baseSpeed * progressionFactor, maxSpeed);
+      const angle = impact * (Math.PI / 3);
+      VyRef.current = (goingUp ? -1 : 1) * Math.abs(speed * Math.cos(angle));
+      VxRef.current = speed * Math.sin(angle) + barraVxRef.current * 0.008;
+      vyAccelRef.current = configRef.current.spinEnabled ? -barraVxRef.current * 0.5 : 0;
+      const totalSpeed = Math.hypot(VxRef.current, VyRef.current);
+      if (totalSpeed > 0) {
+        const minVy = totalSpeed * 0.28;
+        if (Math.abs(VyRef.current) < minVy) {
+          VyRef.current = (goingUp ? -1 : 1) * minVy;
+          VxRef.current = Math.sign(VxRef.current || 1) * Math.sqrt(Math.max(0, totalSpeed ** 2 - minVy ** 2));
+        }
+      }
+    }
+
     function applyTopBottomCollision(cy: number, barraCenterY: number) {
       VyRef.current = cy < barraCenterY ? -Math.abs(VyRef.current) : Math.abs(VyRef.current);
     }
 
     function collideWithRect(
-      cx: number,
-      cy: number,
-      r: number,
-      prevCx: number | null,
-      prevCy: number | null,
-      rect: DOMRect,
-      vyRef: { current: number },
-      directionSign: 1 | -1,
-      approachingFromRight: boolean
+      cx: number, cy: number, r: number, prevCx: number | null, prevCy: number | null,
+      rect: DOMRect, vyRef: { current: number }, directionSign: 1 | -1, approachingFromRight: boolean
     ): boolean {
       const overlap = circleOverlapsRect(cx, cy, r, rect.left, rect.top, rect.width, rect.height);
 
@@ -975,8 +1043,45 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       return false;
     }
 
+    function collideWithRectPortrait(
+      cx: number, cy: number, r: number, prevCx: number | null, prevCy: number | null,
+      rect: DOMRect, vxRef: { current: number }, goingUp: boolean, approachingFromAbove: boolean
+    ): boolean {
+      const overlap = circleOverlapsRect(cx, cy, r, rect.left, rect.top, rect.width, rect.height);
+
+      if (!overlap && prevCx !== null && prevCy !== null) {
+        const faceY = approachingFromAbove ? rect.top : rect.bottom;
+        const cxAtCross = sweptFaceCrossingY(prevCy, prevCx, cy, cx, faceY, rect.left - r, rect.right + r, approachingFromAbove);
+        if (cxAtCross !== null) {
+          applyFrontCollisionPortrait(cxAtCross, rect.left + rect.width / 2, rect.width / 2, vxRef, goingUp);
+          cooldownRef.current = 20;
+          return true;
+        }
+      }
+
+      if (overlap) {
+        const side = getCollisionSide(cx, cy, r, rect.left, rect.top, rect.width, rect.height);
+        if (side === "topbottom") {
+          // Main face of horizontal paddle
+          applyFrontCollisionPortrait(cx, rect.left + rect.width / 2, rect.width / 2, vxRef, goingUp);
+        } else {
+          // Side of paddle — just deflect Vy
+          VyRef.current = goingUp ? -Math.abs(VyRef.current) : Math.abs(VyRef.current);
+        }
+        cooldownRef.current = 20;
+        return true;
+      }
+
+      return false;
+    }
+
     function checkCollision() {
-      if (!bolaRef.current || !barra1Ref.current || !barra2Ref.current) {
+      const isSolo = gameModeRef.current === "solo";
+      if (!bolaRef.current || !barra1Ref.current) {
+        collisionRafRef.current = requestAnimationFrame(checkCollision);
+        return;
+      }
+      if (!isSolo && !barra2Ref.current) {
         collisionRafRef.current = requestAnimationFrame(checkCollision);
         return;
       }
@@ -1003,18 +1108,43 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       prevBallCyRef.current = cy;
 
       const barra1Rect = barra1Ref.current.getBoundingClientRect();
-      const barra2Rect = barra2Ref.current.getBoundingClientRect();
 
-      if (collideWithRect(cx, cy, r, prevCx, prevCy, barra1Rect, barra1VyRef, 1, true)) {
-        lastTouchRef.current = "player1";
-        collisionRafRef.current = requestAnimationFrame(checkCollision);
-        return;
-      }
+      if (isPortraitRef.current) {
+        // Portrait: P1 at bottom (goingUp=true, approachingFromAbove=true — ball comes from above)
+        if (collideWithRectPortrait(cx, cy, r, prevCx, prevCy, barra1Rect, barra1VxRef, true, true)) {
+          lastTouchRef.current = "player1";
+          if (gameModeRef.current === "rally") { rallyHitsRef.current++; setRallyHits(rallyHitsRef.current); }
+          collisionRafRef.current = requestAnimationFrame(checkCollision);
+          return;
+        }
+        if (!isSolo && barra2Ref.current) {
+          const barra2Rect = barra2Ref.current.getBoundingClientRect();
+          // P2 at top (goingUp=false, approachingFromAbove=false — ball comes from below)
+          if (collideWithRectPortrait(cx, cy, r, prevCx, prevCy, barra2Rect, barra2VxRef, false, false)) {
+            lastTouchRef.current = "player2";
+            if (gameModeRef.current === "rally") { rallyHitsRef.current++; setRallyHits(rallyHitsRef.current); }
+            collisionRafRef.current = requestAnimationFrame(checkCollision);
+            return;
+          }
+        }
+      } else {
+        // Landscape
+        if (collideWithRect(cx, cy, r, prevCx, prevCy, barra1Rect, barra1VyRef, 1, true)) {
+          lastTouchRef.current = "player1";
+          if (gameModeRef.current === "rally") { rallyHitsRef.current++; setRallyHits(rallyHitsRef.current); }
+          collisionRafRef.current = requestAnimationFrame(checkCollision);
+          return;
+        }
 
-      if (collideWithRect(cx, cy, r, prevCx, prevCy, barra2Rect, barra2VyRef, -1, false)) {
-        lastTouchRef.current = "player2";
-        collisionRafRef.current = requestAnimationFrame(checkCollision);
-        return;
+        if (!isSolo && barra2Ref.current) {
+          const barra2Rect = barra2Ref.current.getBoundingClientRect();
+          if (collideWithRect(cx, cy, r, prevCx, prevCy, barra2Rect, barra2VyRef, -1, false)) {
+            lastTouchRef.current = "player2";
+            if (gameModeRef.current === "rally") { rallyHitsRef.current++; setRallyHits(rallyHitsRef.current); }
+            collisionRafRef.current = requestAnimationFrame(checkCollision);
+            return;
+          }
+        }
       }
 
       if (shieldActive.player1 && shield1Ref.current) {
@@ -1022,7 +1152,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         if (collideWithRect(cx, cy, r, prevCx, prevCy, shield1Rect, { current: 0 }, 1, true)) {
           lastTouchRef.current = "player1";
           collisionRafRef.current = requestAnimationFrame(checkCollision);
-          setShieldActive((prev) => ({ ...prev, player1: false }))
+          setShieldActive((prev) => ({ ...prev, player1: false }));
           return;
         }
       }
@@ -1032,8 +1162,47 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         if (collideWithRect(cx, cy, r, prevCx, prevCy, shield2Rect, { current: 0 }, -1, false)) {
           lastTouchRef.current = "player2";
           collisionRafRef.current = requestAnimationFrame(checkCollision);
-          setShieldActive((prev) => ({ ...prev, player2: false }))
+          setShieldActive((prev) => ({ ...prev, player2: false }));
           return;
+        }
+      }
+
+      // Solo: check brick collision
+      if (gameModeRef.current === "solo" && bricksRef.current.length > 0) {
+        for (const brick of bricksRef.current) {
+          if (circleOverlapsRect(cx, cy, r, brick.x, brick.y, brick.w, brick.h)) {
+            const side = getCollisionSide(cx, cy, r, brick.x, brick.y, brick.w, brick.h);
+            if (side === "topbottom") {
+              VyRef.current = cy < brick.y + brick.h / 2 ? -Math.abs(VyRef.current) : Math.abs(VyRef.current);
+            } else {
+              VxRef.current = cx < brick.x + brick.w / 2 ? -Math.abs(VxRef.current) : Math.abs(VxRef.current);
+            }
+            const hitId = brick.id;
+            const brickCx = brick.x + brick.w / 2;
+            const brickCy = brick.y + brick.h / 2;
+            bricksRef.current = bricksRef.current.filter(b => b.id !== hitId);
+            setBricks(bricksRef.current.slice());
+            if (bricksRef.current.length === 0) setWinner("player1");
+
+            // 10% chance to drop an item
+            if (Math.random() < 0.10) {
+              const pool = itemPoolRef.current.filter(it => !it.onBallCollide);
+              if (pool.length > 0) {
+                const dropped = pool[Math.floor(Math.random() * pool.length)];
+                setActiveItems(prev => [...prev, {
+                  ...dropped,
+                  instanceId: `drop-${Date.now()}-${Math.random()}`,
+                  x: brickCx,
+                  y: brickCy,
+                  radius: ITEM_RADIUS,
+                }]);
+              }
+            }
+
+            cooldownRef.current = 8;
+            collisionRafRef.current = requestAnimationFrame(checkCollision);
+            return;
+          }
         }
       }
 
@@ -1048,9 +1217,11 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         collisionRafRef.current = null;
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shieldActive]);
 
   useEffect(() => {
+    if (config.mode === "solo") return;
     function scheduleNextSpawn() {
       const base = configRef.current.spawnDelay;
       const delay = base + Math.random() * base * 0.5;
@@ -1106,7 +1277,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         const caughtByBall = circleOverlapsCircle(item.x, item.y, item.radius, ballX, ballY, ballR);
         if (caughtByBall) {
           if (item.onBallCollide) {
-            // Mine / trap: direct effect, not stored in slot
             item.onBallCollide();
           } else {
             const slotItem: StoredSlot = {
@@ -1164,7 +1334,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       notify("⚠ BOLA NO LADO ERRADO", "#ffd43b", "player1");
       return;
     }
-    // Consume slot first so onCatch (e.g. swapItems) can override setCurrent1 if needed
     if (next1) { setCurrent1(next1); setNext1(null); } else { setCurrent1(null); }
     current1.onCatch("player1");
   }
@@ -1197,7 +1366,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   }
   rotate2Ref.current = rotate2;
 
-  // ── Host mode: receive guest inputs & send state ──────────────────
   useEffect(() => {
     if (!conn) return;
     const onData = (raw: unknown) => {
@@ -1219,8 +1387,8 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     let rafId: number;
     const tick = () => {
       if (!conn.open) { rafId = requestAnimationFrame(tick); return; }
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
+      const cvw = window.innerWidth;
+      const cvh = window.innerHeight;
       const ballEl = bolaRef.current;
       const p1El   = barra1Ref.current;
       const p2El   = barra2Ref.current;
@@ -1230,17 +1398,17 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       const p2R = p2El.getBoundingClientRect();
       const state: StateMsg = {
         type: "state",
-        bx: bR.left / vw, by: bR.top / vh, br: (bR.width / 2) / vh, bg: ballGhostRef.current,
-        p1y: p1R.top / vh, p2y: p2R.top / vh, p1h: p1R.height / vh, p2h: p2R.height / vh, pw: p1R.width,
+        bx: bR.left / cvw, by: bR.top / cvh, br: (bR.width / 2) / cvh, bg: ballGhostRef.current,
+        p1y: p1R.top / cvh, p2y: p2R.top / cvh, p1h: p1R.height / cvh, p2h: p2R.height / cvh, pw: p1R.width,
         score: scoreRef.current as [number, number],
         winner: winnerRef.current,
         current1: current1Ref.current ? { iconId: iconToId(current1Ref.current.icon), color: current1Ref.current.color } : null,
         current2: current2Ref.current ? { iconId: iconToId(current2Ref.current.icon), color: current2Ref.current.color } : null,
         next1: next1Ref.current ? { iconId: iconToId(next1Ref.current.icon), color: next1Ref.current.color } : null,
         next2: next2Ref.current ? { iconId: iconToId(next2Ref.current.icon), color: next2Ref.current.color } : null,
-        items: activeItemsRef.current.map(it => ({ id: it.instanceId, x: it.x / vw, y: it.y / vh, r: it.radius / vh, color: it.color, iconId: iconToId(it.icon) })),
+        items: activeItemsRef.current.map(it => ({ id: it.instanceId, x: it.x / cvw, y: it.y / cvh, r: it.radius / cvh, color: it.color, iconId: iconToId(it.icon) })),
         buffs: activeBuffsRef.current.map(b => ({ key: b.key, label: b.label, iconId: iconToId(b.icon), color: b.color, player: b.player, startedAt: b.startedAt, duration: b.duration })),
-        decoys: decoysRef.current.map(d => ({ id: d.id, x: d.x / vw, y: d.y / vh, r: d.radius / vh })),
+        decoys: decoysRef.current.map(d => ({ id: d.id, x: d.x / cvw, y: d.y / cvh, r: d.radius / cvh })),
         notifs: notificationsRef.current.map(n => ({ id: n.id, text: n.text, color: n.color, player: n.player })),
         s1: shieldActiveRefH.current.player1, s2: shieldActiveRefH.current.player2,
         f1: frozenStateRef.current.player1,  f2: frozenStateRef.current.player2,
@@ -1258,7 +1426,6 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       Object.values(timers).forEach((id) => {
         if (id !== null && id !== undefined) clearTimeout(id);
       });
-
       if (itemSpawnTimeoutRef.current !== null) clearTimeout(itemSpawnTimeoutRef.current);
       if (itemPickupRafRef.current !== null) cancelAnimationFrame(itemPickupRafRef.current);
       if (distortionIntervalRef.current !== null) clearInterval(distortionIntervalRef.current);
@@ -1267,33 +1434,15 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   const paddleHeight1 = BASE_PADDLE_HEIGHT * playerSizeMultiplier.player1;
   const paddleHeight2 = BASE_PADDLE_HEIGHT * playerSizeMultiplier.player2;
+  const portPaddleW1 = Math.round(PORT_PADDLE_W * playerSizeMultiplier.player1);
+  const portPaddleW2 = Math.round(PORT_PADDLE_W * playerSizeMultiplier.player2);
+
+  // Solo win conditions
+  const soloWon = config.mode === "solo" && winner === "player1";
+  const soloLost = config.mode === "solo" && winner === "player2";
 
   return (
     <>
-    {/* Overlay portrait em mobile */}
-    <div style={{
-      display: "none",
-      position: "fixed", inset: 0, zIndex: 200,
-      background: "#0e0b18",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 20,
-      // Mostrado só via CSS media query — ver abaixo
-    } as React.CSSProperties} className="portrait-overlay">
-      <div style={{ fontSize: "3rem" }}>↻</div>
-      <div style={{
-        fontFamily: "'Courier New', Courier, monospace",
-        color: "rgba(232,244,251,0.7)",
-        fontSize: "1rem",
-        letterSpacing: "0.15em",
-        textAlign: "center",
-        padding: "0 32px",
-      }}>
-        RODA O TELEMÓVEL<br/>
-        <span style={{ fontSize: "0.75rem", opacity: 0.5 }}>joga em landscape</span>
-      </div>
-    </div>
     {winner && (
       <div style={{
         position: "fixed", inset: 0, zIndex: 200,
@@ -1305,13 +1454,17 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
           fontFamily: "'Courier New', Courier, monospace",
           fontSize: "clamp(1.2rem, 5vw, 2.2rem)",
           fontWeight: "bold",
-          color: winner === "player1" ? "#56d1c4" : "#f5895e",
-          textShadow: `0 0 32px ${winner === "player1" ? "#56d1c488" : "#f5895e88"}`,
+          color: soloWon ? "#ffd43b" : soloLost ? "#f5895e" : winner === "player1" ? "#56d1c4" : "#f5895e",
+          textShadow: `0 0 32px ${soloWon ? "#ffd43b88" : soloLost ? "#f5895e88" : winner === "player1" ? "#56d1c488" : "#f5895e88"}`,
           letterSpacing: "0.15em",
           textAlign: "center",
         }}>
-          {winner === "player1" ? "JOGADOR 1" : "JOGADOR 2"}<br />
-          <span style={{ fontSize: "0.6em", color: "rgba(255,255,255,0.72)", fontWeight: "normal" }}>GANHOU!</span>
+          {soloWon
+            ? <>TODOS OS BLOCOS<br /><span style={{ fontSize: "0.6em", color: "rgba(255,255,255,0.72)", fontWeight: "normal" }}>DESTRUÍDOS!</span></>
+            : soloLost
+            ? <>PERDESTE!</>
+            : <>{winner === "player1" ? "JOGADOR 1" : "JOGADOR 2"}<br /><span style={{ fontSize: "0.6em", color: "rgba(255,255,255,0.72)", fontWeight: "normal" }}>GANHOU!</span></>
+          }
         </div>
         <div style={{ display: "flex", gap: 14 }}>
           <button
@@ -1327,16 +1480,34 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     )}
 
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-      <Pontuacao score1={score[0]} score2={score[1]} />
-      <StoredItems
-        left={{ current: current1 ?? undefined, next: next1 ?? undefined }}
-        right={{ current: current2 ?? undefined, next: next2 ?? undefined }}
-      />
+      {config.mode === "pong" ? (
+        <Pontuacao score1={score[0]} score2={score[1]} />
+      ) : config.mode === "rally" ? (
+        <div style={modeHudStyle}>RALLY — {rallyHits} {rallyHits === 1 ? "toque" : "toques"}</div>
+      ) : config.mode === "solo" ? (
+        <div style={modeHudStyle}>{bricks.length} bloco{bricks.length !== 1 ? "s" : ""}</div>
+      ) : null}
+
+      {(config.mode === "pong" || config.mode === "rally") && (
+        <StoredItems
+          left={{ current: current1 ?? undefined, next: next1 ?? undefined }}
+          right={{ current: current2 ?? undefined, next: next2 ?? undefined }}
+        />
+      )}
 
       {shieldActive.player1 && (
         <div
           ref={shield1Ref}
-          style={{
+          style={isPortrait ? {
+            position: "fixed",
+            bottom: PORT_PAD_OFF + PORT_PADDLE_H,
+            left: "20%",
+            width: "60%",
+            height: 8,
+            borderRadius: 999,
+            background: "rgba(86,209,196,0.35)",
+            boxShadow: "0 0 16px rgba(86,209,196,0.5)",
+          } : {
             position: "fixed",
             left: 46,
             top: "20%",
@@ -1352,7 +1523,16 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       {shieldActive.player2 && (
         <div
           ref={shield2Ref}
-          style={{
+          style={isPortrait ? {
+            position: "fixed",
+            top: PORT_PAD_OFF + PORT_PADDLE_H,
+            left: "20%",
+            width: "60%",
+            height: 8,
+            borderRadius: 999,
+            background: "rgba(245,137,94,0.35)",
+            boxShadow: "0 0 16px rgba(245,137,94,0.5)",
+          } : {
             position: "fixed",
             right: 46,
             top: "20%",
@@ -1366,10 +1546,12 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       )}
 
       <ManualMover
+        key={isPortrait ? "p1-portrait" : "p1-landscape"}
         v={500 * playerSpeedMultiplier.player1}
-        initialX={PADDLE_OFFSET}
-        initialY={(vh - paddleHeight1) / 2}
-        elementHeight={paddleHeight1}
+        initialX={isPortrait ? (vw - portPaddleW1) / 2 : PADDLE_OFFSET}
+        initialY={isPortrait ? vh - PORT_PAD_OFF - PORT_PADDLE_H : (vh - paddleHeight1) / 2}
+        elementHeight={isPortrait ? portPaddleW1 : paddleHeight1}
+        horizontal={isPortrait}
         keys={new Map([
           ["w", "up"],
           ["s", "down"],
@@ -1377,77 +1559,101 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
           ["d", "rotate"]
         ])}
         onVelocityChange={(v) => {
-          barra1VyRef.current = v;
+          if (isPortrait) barra1VxRef.current = v;
+          else barra1VyRef.current = v;
         }}
         onShoot={shoot1}
         onRotate={rotate1}
-        touchZone="left"
+        touchZone={isPortrait ? "bottom" : "left"}
         gamepadIndex={p1GamepadIndex}
         frozen={frozen.player1}
         inverted={inverted.player1}
         driftForce={drift.player1}
-        paused={isPortrait || winner !== null}
+        paused={winner !== null}
       >
-        <Barra ref={barra1Ref} height={paddleHeight1} width={BASE_PADDLE_WIDTH} color="#56d1c4" glowColor="86,209,196" />
+        <Barra ref={barra1Ref}
+          height={isPortrait ? PORT_PADDLE_H : paddleHeight1}
+          width={isPortrait ? portPaddleW1 : BASE_PADDLE_WIDTH}
+          color="#56d1c4" glowColor="86,209,196" />
       </ManualMover>
 
-      <ManualMover
-        v={500 * playerSpeedMultiplier.player2}
-        initialX={vw - PADDLE_OFFSET - BASE_PADDLE_WIDTH}
-        initialY={(vh - paddleHeight2) / 2}
-        elementHeight={paddleHeight2}
-        keys={conn ? new Map() : new Map([
-          ["ArrowUp", "up"],
-          ["ArrowDown", "down"],
-          ["Enter", "shoot"],
-          ["ArrowRight", "rotate"]
-        ])}
-        onVelocityChange={(v) => {
-          barra2VyRef.current = v;
-        }}
-        onShoot={shoot2}
-        onRotate={rotate2}
-        touchZone={conn ? undefined : "right"}
-        gamepadIndex={conn ? undefined : p2GamepadIndex}
-        frozen={frozen.player2}
-        inverted={inverted.player2}
-        driftForce={drift.player2}
-        paused={isPortrait || winner !== null}
-        externalInput={conn ? guestInputRef : null}
-      >
-        <Barra ref={barra2Ref} height={paddleHeight2} width={BASE_PADDLE_WIDTH} color="#f5895e" glowColor="245,137,94" />
-      </ManualMover>
+      {config.mode !== "solo" && (
+        <ManualMover
+          key={isPortrait ? "p2-portrait" : "p2-landscape"}
+          v={500 * playerSpeedMultiplier.player2}
+          initialX={isPortrait ? (vw - portPaddleW2) / 2 : vw - PADDLE_OFFSET - BASE_PADDLE_WIDTH}
+          initialY={isPortrait ? PORT_PAD_OFF : (vh - paddleHeight2) / 2}
+          elementHeight={isPortrait ? portPaddleW2 : paddleHeight2}
+          horizontal={isPortrait}
+          keys={conn ? new Map() : new Map([
+            ["ArrowUp", "up"],
+            ["ArrowDown", "down"],
+            ["Enter", "shoot"],
+            ["ArrowRight", "rotate"]
+          ])}
+          onVelocityChange={(v) => {
+            if (isPortrait) barra2VxRef.current = v;
+            else barra2VyRef.current = v;
+          }}
+          onShoot={shoot2}
+          onRotate={rotate2}
+          touchZone={isPortrait ? "top" : (conn ? undefined : "right")}
+          gamepadIndex={conn ? undefined : p2GamepadIndex}
+          frozen={frozen.player2}
+          inverted={inverted.player2}
+          driftForce={drift.player2}
+          paused={winner !== null}
+          externalInput={conn ? guestInputRef : null}
+        >
+          <Barra ref={barra2Ref}
+            height={isPortrait ? PORT_PADDLE_H : paddleHeight2}
+            width={isPortrait ? portPaddleW2 : BASE_PADDLE_WIDTH}
+            color="#f5895e" glowColor="245,137,94" />
+        </ManualMover>
+      )}
 
       <AutoMover
+        key={isPortrait ? "ball-portrait" : "ball-landscape"}
         vxRef={VxRef}
         vyRef={VyRef}
-        initialX={vw / 2 - BALL_RADIUS}
-        initialY={vh / 2 - BALL_RADIUS}
+        initialX={!isPortrait && config.mode === "solo" ? PADDLE_OFFSET + BASE_PADDLE_WIDTH + 20 : vw / 2 - BALL_RADIUS}
+        initialY={isPortrait && config.mode === "solo" ? vh - PORT_PAD_OFF - PORT_PADDLE_H - 40 : vh / 2 - BALL_RADIUS}
         onGoal={onGoal}
         teleportY={teleportY}
         vyAccelRef={vyAccelRef}
         magnetRef={magnetRef}
         maxSpeedRef={slowMaxSpeedRef}
-        paused={isPortrait || winner !== null}
+        paused={winner !== null}
+        bounceLeft={config.mode === "rally"}
+        bounceRight={config.mode !== "pong"}
+        portraitMode={isPortrait}
+        bounceTop={isPortrait && (config.mode === "rally" || config.mode === "solo")}
+        bounceBottom={isPortrait && config.mode === "rally"}
+        onWallBounce={() => {
+          if (gameModeRef.current === "rally") {
+            rallyHitsRef.current = 0;
+            setRallyHits(0);
+          }
+        }}
       >
         <Bola ref={bolaRef} radius={ballRadius} ghost={ballGhost} />
       </AutoMover>
 
-      {/* Buffs activos — player 1 (esquerda) */}
+      {/* Buffs activos — player 1 */}
       <div style={{ position: "fixed", left: 16, top: 102, display: "flex", flexDirection: "column", gap: 5, zIndex: 30, pointerEvents: "none" }}>
         {activeBuffs.filter(b => b.player === "player1").map(b => (
           <BuffBar key={`${b.key}-${b.startedAt}`} buff={b} align="left" />
         ))}
       </div>
 
-      {/* Buffs activos — player 2 (direita) */}
+      {/* Buffs activos — player 2 */}
       <div style={{ position: "fixed", right: 16, top: 102, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5, zIndex: 30, pointerEvents: "none" }}>
         {activeBuffs.filter(b => b.player === "player2").map(b => (
           <BuffBar key={`${b.key}-${b.startedAt}`} buff={b} align="right" />
         ))}
       </div>
 
-      {/* Notificações de habilidades — agrupadas por jogador */}
+      {/* Notificações */}
       {(["player1", "player2"] as PlayerId[]).map(player => {
         const pNotifs = notifications.filter(n => n.player === player);
         if (pNotifs.length === 0) return null;
@@ -1506,16 +1712,14 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         MENU
       </button>
 
-      {/* Botões mobile */}
-      {isTouchDevice && (
+      {/* Botões mobile — landscape only, modes with items */}
+      {isTouchDevice && !isPortrait && (config.mode === "pong" || config.mode === "rally" || config.mode === "solo") && (
         <>
-          {/* Jogador 1 — botões bottom-left */}
           <div style={{ position: "fixed", bottom: 20, left: 16, display: "flex", gap: 10, zIndex: 50 }}>
             <MobileBtn label="TROCAR" color="#56d1c4" onPress={rotate1} />
             <MobileBtn label="USAR" color="#56d1c4" onPress={shoot1} />
           </div>
-          {/* Jogador 2 — botões bottom-right (só no modo local) */}
-          {!conn && (
+          {!conn && config.mode !== "solo" && (
             <div style={{ position: "fixed", bottom: 20, right: 16, display: "flex", gap: 10, zIndex: 50 }}>
               <MobileBtn label="USAR" color="#f5895e" onPress={shoot2} />
               <MobileBtn label="TROCAR" color="#f5895e" onPress={rotate2} />
@@ -1531,7 +1735,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
           startY={s.startY}
           direction={s.direction}
           enemyRef={s.shooter === "player1" ? barra2Ref : barra1Ref}
-          paused={isPortrait || winner !== null}
+          paused={winner !== null}
           onHit={() => {
             setShots(prev => prev.filter(x => x.id !== s.id));
             applyFreeze(opposite(s.shooter));
@@ -1563,10 +1767,44 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
           <Bola radius={ballRadius} ghost={ballGhost} />
         </div>
       ))}
+
+      {/* Solo bricks */}
+      {config.mode === "solo" && bricks.map(brick => (
+        <div
+          key={brick.id}
+          style={{
+            position: "fixed",
+            left: brick.x,
+            top: brick.y,
+            width: brick.w,
+            height: brick.h,
+            background: brick.color + "99",
+            border: `2px solid ${brick.color}`,
+            borderRadius: 4,
+            boxSizing: "border-box" as const,
+            pointerEvents: "none",
+          }}
+        />
+      ))}
     </div>
     </>
   );
 }
+
+const modeHudStyle: React.CSSProperties = {
+  position: "fixed",
+  top: 14,
+  left: "50%",
+  transform: "translateX(-50%)",
+  fontFamily: "'Courier New', Courier, monospace",
+  fontSize: "clamp(0.85rem, 2vw, 1.1rem)",
+  fontWeight: "bold",
+  color: "rgba(255,255,255,0.75)",
+  letterSpacing: "0.12em",
+  pointerEvents: "none",
+  whiteSpace: "nowrap",
+  zIndex: 20,
+};
 
 const winBtnStyle: React.CSSProperties = {
   background: "rgba(255,255,255,0.05)",

@@ -13,10 +13,32 @@ type AutoMoverProps = {
   magnetRef?: { current: "player1" | "player2" | null };
   maxSpeedRef?: { current: number };
   paused?: boolean;
+  /** Landscape: left wall bounces instead of triggering onGoal("player2") */
+  bounceLeft?: boolean;
+  /** Landscape: right wall bounces instead of triggering onGoal("player1") */
+  bounceRight?: boolean;
+  /** Portrait mode: swap goal/bounce axes — Y becomes goal axis, X always bounces */
+  portraitMode?: boolean;
+  /** Portrait: top wall bounces instead of triggering onGoal("player2") */
+  bounceTop?: boolean;
+  /** Portrait: bottom wall bounces instead of triggering onGoal("player1") */
+  bounceBottom?: boolean;
+  /** Called whenever the ball bounces off any wall (not on goals) */
+  onWallBounce?: () => void;
   children: React.ReactNode;
 };
 
-export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, onGoal, teleportY, vyAccelRef, magnetRef, maxSpeedRef, paused = false, children }: AutoMoverProps) {
+export default function AutoMover({
+  vxRef, vyRef,
+  initialX = 40, initialY = 40,
+  onGoal, teleportY, vyAccelRef, magnetRef, maxSpeedRef,
+  paused = false,
+  bounceLeft = false, bounceRight = false,
+  portraitMode = false,
+  bounceTop = false, bounceBottom = false,
+  onWallBounce,
+  children,
+}: AutoMoverProps) {
   const posRef = useRef({ x: initialX, y: initialY });
   const sizeRef = useRef({ w: 0, h: 0 });
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -24,6 +46,8 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
   const lastRef = useRef<number | null>(null);
   const onGoalRef = useRef(onGoal);
   onGoalRef.current = onGoal;
+  const onWallBounceRef = useRef(onWallBounce);
+  onWallBounceRef.current = onWallBounce;
 
   useEffect(() => {
     const el = elRef.current;
@@ -34,6 +58,17 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
 
   const pausedRef = useRef(paused);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
+
+  const bounceLeftRef = useRef(bounceLeft);
+  useEffect(() => { bounceLeftRef.current = bounceLeft; }, [bounceLeft]);
+  const bounceRightRef = useRef(bounceRight);
+  useEffect(() => { bounceRightRef.current = bounceRight; }, [bounceRight]);
+  const portraitModeRef = useRef(portraitMode);
+  useEffect(() => { portraitModeRef.current = portraitMode; }, [portraitMode]);
+  const bounceTopRef = useRef(bounceTop);
+  useEffect(() => { bounceTopRef.current = bounceTop; }, [bounceTop]);
+  const bounceBottomRef = useRef(bounceBottom);
+  useEffect(() => { bounceBottomRef.current = bounceBottom; }, [bounceBottom]);
 
   const lastTeleportYRef = useRef<number | null>(null);
   useEffect(() => {
@@ -46,7 +81,7 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
   useEffect(() => {
     const tick = (t: number) => {
       if (pausedRef.current) {
-        lastRef.current = t; // keep time in sync so dt doesn't spike on resume
+        lastRef.current = t;
         rafRef.current = requestAnimationFrame(tick);
         return;
       }
@@ -55,33 +90,31 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
       const dt = Math.min((t - lastRef.current) / 1000, 0.05);
       lastRef.current = t;
 
-      // Fallback size measurement if not yet measured
       if (sizeRef.current.w === 0 && elRef.current) {
         const r = elRef.current.getBoundingClientRect();
         if (r.width > 0) sizeRef.current = { w: r.width, h: r.height };
       }
 
-      // Aplicar spin (aceleração em Y impartida pela barra)
+      // Spin (VY acceleration from paddle)
       if (vyAccelRef) {
         const speedBefore = Math.hypot(vxRef.current, vyRef.current);
         vyRef.current += vyAccelRef.current * dt;
         vyAccelRef.current *= Math.exp(-1.2 * dt);
-        // Preserve total speed: spin curves the trajectory, doesn't accelerate/decelerate
         const speedAfter = Math.hypot(vxRef.current, vyRef.current);
-        if (speedAfter > 0 && speedBefore > 0) {
+        if (speedAfter > 0 && speedBefore > 0 && speedAfter < speedBefore) {
           const rescale = speedBefore / speedAfter;
           vxRef.current *= rescale;
           vyRef.current *= rescale;
         }
-        // Near-vertical cap: prevent fully vertical trajectory (maintains speed)
-        const maxVy = speedBefore * 0.968;
+        const totalSpeed = Math.hypot(vxRef.current, vyRef.current);
+        const maxVy = totalSpeed * 0.968;
         if (Math.abs(vyRef.current) > maxVy) {
           vyRef.current = Math.sign(vyRef.current) * maxVy;
-          vxRef.current = Math.sign(vxRef.current || 1) * Math.sqrt(Math.max(0, speedBefore ** 2 - maxVy ** 2));
+          vxRef.current = Math.sign(vxRef.current || 1) * Math.sqrt(Math.max(0, totalSpeed ** 2 - maxVy ** 2));
         }
       }
 
-      // Speed cap (slow-motion enforces its multiplier regardless of other buffs)
+      // Speed cap
       if (maxSpeedRef && isFinite(maxSpeedRef.current) && maxSpeedRef.current > 0) {
         const cur = Math.hypot(vxRef.current, vyRef.current);
         if (cur > maxSpeedRef.current) {
@@ -90,17 +123,16 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
         }
       }
 
-      // Magnetism: only pull vy toward 0 (no vx compensation — speed decreases naturally)
-      // Also dampens spin so they don't fight each other
+      // Magnet
       if (magnetRef?.current) {
         const activator = magnetRef.current;
         const headingAtPlayer =
           (activator === "player1" && vxRef.current < 0) ||
           (activator === "player2" && vxRef.current > 0);
         if (headingAtPlayer) {
-          const factor = Math.pow(0.4, dt); // half-life ~0.9s
+          const factor = Math.pow(0.4, dt);
           vyRef.current *= factor;
-          if (vyAccelRef) vyAccelRef.current *= factor; // prevent spin fighting magnet
+          if (vyAccelRef) vyAccelRef.current *= factor;
         }
       }
 
@@ -109,33 +141,86 @@ export default function AutoMover({ vxRef, vyRef, initialX = 40, initialY = 40, 
       const nextX = posRef.current.x + vxRef.current * dt;
       const nextY = posRef.current.y + vyRef.current * dt;
 
-      if (nextY >= maxY) {
-        vyRef.current = -Math.abs(vyRef.current);
-        if (vyAccelRef) vyAccelRef.current *= -0.4;
-      }
-      if (nextY <= 0) {
-        vyRef.current = Math.abs(vyRef.current);
-        if (vyAccelRef) vyAccelRef.current *= -0.4;
-      }
+      const cx_center = window.innerWidth / 2 - sizeRef.current.w / 2;
+      const cy_center = window.innerHeight / 2 - sizeRef.current.h / 2;
 
-      if (nextX >= maxX) {
-        // Golo direito — sem side-effects dentro do setPos updater
-        const cx = window.innerWidth / 2 - sizeRef.current.w / 2;
-        const cy = window.innerHeight / 2 - sizeRef.current.h / 2;
-        posRef.current = { x: cx, y: cy };
-        if (onGoalRef.current) onGoalRef.current("player1");
-      } else if (nextX <= 0) {
-        // Golo esquerdo
-        const cx = window.innerWidth / 2 - sizeRef.current.w / 2;
-        const cy = window.innerHeight / 2 - sizeRef.current.h / 2;
-        posRef.current = { x: cx, y: cy };
-        if (onGoalRef.current) onGoalRef.current("player2");
+      if (portraitModeRef.current) {
+        // Portrait: X always bounces, Y is goal axis
+        if (nextX >= maxX) {
+          vxRef.current = -Math.abs(vxRef.current);
+          if (vyAccelRef) vyAccelRef.current *= -0.4;
+          onWallBounceRef.current?.();
+        } else if (nextX <= 0) {
+          vxRef.current = Math.abs(vxRef.current);
+          if (vyAccelRef) vyAccelRef.current *= -0.4;
+          onWallBounceRef.current?.();
+        }
+
+        if (nextY >= maxY) {
+          if (bounceBottomRef.current) {
+            vyRef.current = -Math.abs(vyRef.current);
+            if (vyAccelRef) vyAccelRef.current *= -0.4;
+            posRef.current = { x: Math.min(Math.max(nextX, 0), maxX), y: maxY };
+            onWallBounceRef.current?.();
+          } else {
+            posRef.current = { x: cx_center, y: cy_center };
+            if (onGoalRef.current) onGoalRef.current("player1");
+          }
+        } else if (nextY <= 0) {
+          if (bounceTopRef.current) {
+            vyRef.current = Math.abs(vyRef.current);
+            if (vyAccelRef) vyAccelRef.current *= -0.4;
+            posRef.current = { x: Math.min(Math.max(nextX, 0), maxX), y: 0 };
+            onWallBounceRef.current?.();
+          } else {
+            posRef.current = { x: cx_center, y: cy_center };
+            if (onGoalRef.current) onGoalRef.current("player2");
+          }
+        } else {
+          posRef.current = {
+            x: Math.min(Math.max(nextX, 0), maxX),
+            y: Math.min(Math.max(nextY, 0), maxY),
+          };
+        }
       } else {
-        // wall bounce handled above
-        posRef.current = {
-          x: Math.min(Math.max(nextX, 0), maxX),
-          y: Math.min(Math.max(nextY, 0), maxY),
-        };
+        // Landscape: Y always bounces, X is goal axis
+        if (nextY >= maxY) {
+          vyRef.current = -Math.abs(vyRef.current);
+          if (vyAccelRef) vyAccelRef.current *= -0.4;
+          onWallBounceRef.current?.();
+        }
+        if (nextY <= 0) {
+          vyRef.current = Math.abs(vyRef.current);
+          if (vyAccelRef) vyAccelRef.current *= -0.4;
+          onWallBounceRef.current?.();
+        }
+
+        if (nextX >= maxX) {
+          if (bounceRightRef.current) {
+            vxRef.current = -Math.abs(vxRef.current);
+            if (vyAccelRef) vyAccelRef.current *= -0.4;
+            posRef.current = { x: maxX, y: Math.min(Math.max(nextY, 0), maxY) };
+            onWallBounceRef.current?.();
+          } else {
+            posRef.current = { x: cx_center, y: cy_center };
+            if (onGoalRef.current) onGoalRef.current("player1");
+          }
+        } else if (nextX <= 0) {
+          if (bounceLeftRef.current) {
+            vxRef.current = Math.abs(vxRef.current);
+            if (vyAccelRef) vyAccelRef.current *= -0.4;
+            posRef.current = { x: 0, y: Math.min(Math.max(nextY, 0), maxY) };
+            onWallBounceRef.current?.();
+          } else {
+            posRef.current = { x: cx_center, y: cy_center };
+            if (onGoalRef.current) onGoalRef.current("player2");
+          }
+        } else {
+          posRef.current = {
+            x: Math.min(Math.max(nextX, 0), maxX),
+            y: Math.min(Math.max(nextY, 0), maxY),
+          };
+        }
       }
 
       if (elRef.current) {

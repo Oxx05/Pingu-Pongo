@@ -8,10 +8,10 @@ type ManualMoverProps = {
   initialY?: number;
   elementHeight?: number;
   keys: Map<string, string>;
-  onVelocityChange?: (vy: number) => void;
+  onVelocityChange?: (v: number) => void;
   onShoot?: () => void;
   onRotate?: () => void;
-  touchZone?: "left" | "right";
+  touchZone?: "left" | "right" | "top" | "bottom";
   frozen?: boolean;
   inverted?: boolean;
   driftForce?: number;
@@ -20,6 +20,8 @@ type ManualMoverProps = {
   externalInput?: { current: { up: boolean; down: boolean } } | null;
   /** Index into navigator.getGamepads() — enables gamepad/controller input */
   gamepadIndex?: number;
+  /** Portrait mode: paddle moves horizontally on X axis */
+  horizontal?: boolean;
   children: React.ReactNode;
 };
 
@@ -39,9 +41,9 @@ export default function ManualMover({
   paused = false,
   externalInput = null,
   gamepadIndex,
+  horizontal = false,
   children,
 }: ManualMoverProps) {
-  // vRef: sempre tem o valor mais recente de v, sem re-criar o RAF
   const vRef = useRef(v);
   useEffect(() => { vRef.current = v; }, [v]);
 
@@ -57,7 +59,14 @@ export default function ManualMover({
   const driftRef = useRef(driftForce);
   useEffect(() => { driftRef.current = driftForce; }, [driftForce]);
 
+  const horizontalRef = useRef(horizontal);
+  useEffect(() => { horizontalRef.current = horizontal; }, [horizontal]);
+
+  // Vertical movement (landscape)
   const posYRef = useRef(initialY);
+  // Horizontal movement (portrait)
+  const posXRef = useRef(initialX);
+
   const sizeRef = useRef({ w: 0, h: elementHeight ?? 0 });
   const prevElementHeightRef = useRef(elementHeight ?? 0);
   const elRef = useRef<HTMLDivElement | null>(null);
@@ -73,11 +82,8 @@ export default function ManualMover({
 
   const gamepadIndexRef = useRef(gamepadIndex ?? -1);
   useEffect(() => { gamepadIndexRef.current = gamepadIndex ?? -1; }, [gamepadIndex]);
-  // Gamepad movement state (merged with keyboard in RAF tick)
   const gpUpRef = useRef(false);
   const gpDownRef = useRef(false);
-  // Track previous button states for rising-edge detection (shoot / rotate)
-  // slots: [b0, b1, b2, b4, b5]
   const prevGpButtonsRef = useRef([false, false, false, false, false]);
 
   useEffect(() => {
@@ -86,13 +92,21 @@ export default function ManualMover({
     const newH = elementHeight;
     sizeRef.current.h = newH;
     prevElementHeightRef.current = newH;
-    // Reposition so that the center of the paddle stays at the same Y
     if (oldH > 0 && oldH !== newH) {
-      const center = posYRef.current + oldH / 2;
-      const newTop = Math.max(0, Math.min(window.innerHeight - newH, center - newH / 2));
-      posYRef.current = newTop;
-      if (elRef.current) {
-        elRef.current.style.transform = `translate3d(0,${Math.round(newTop)}px,0)`;
+      if (horizontalRef.current) {
+        const center = posXRef.current + oldH / 2;
+        const newLeft = Math.max(0, Math.min(window.innerWidth - newH, center - newH / 2));
+        posXRef.current = newLeft;
+        if (elRef.current) {
+          elRef.current.style.transform = `translate3d(${Math.round(newLeft)}px,0,0)`;
+        }
+      } else {
+        const center = posYRef.current + oldH / 2;
+        const newTop = Math.max(0, Math.min(window.innerHeight - newH, center - newH / 2));
+        posYRef.current = newTop;
+        if (elRef.current) {
+          elRef.current.style.transform = `translate3d(0,${Math.round(newTop)}px,0)`;
+        }
       }
     }
   }, [elementHeight]);
@@ -105,23 +119,62 @@ export default function ManualMover({
     sizeRef.current = { w: rect.width, h: rect.height };
   }, [children, elementHeight]);
 
+  // touchYRef: tracks clientY (vertical) or clientX (horizontal) of active touch
   const touchYRef = useRef<number | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number; t: number } | null>(null);
 
   useEffect(() => {
     if (!touchZone) return;
-    const isMyZone = (x: number) =>
-      touchZone === "left" ? x < window.innerWidth / 2 : x >= window.innerWidth / 2;
+
+    const isMyZone = (x: number, y: number): boolean => {
+      if (touchZone === "top")    return y < window.innerHeight / 2;
+      if (touchZone === "bottom") return y >= window.innerHeight / 2;
+      if (touchZone === "left")   return x < window.innerWidth / 2;
+      if (touchZone === "right")  return x >= window.innerWidth / 2;
+      return false;
+    };
 
     const onStart = (e: TouchEvent) => {
       for (const t of Array.from(e.changedTouches))
-        if (isMyZone(t.clientX)) { touchYRef.current = t.clientY; e.preventDefault(); }
+        if (isMyZone(t.clientX, t.clientY)) {
+          touchYRef.current = horizontalRef.current ? t.clientX : t.clientY;
+          touchStartRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
+          if (!pausedRef.current) e.preventDefault();
+        }
     };
     const onMove = (e: TouchEvent) => {
       for (const t of Array.from(e.touches))
-        if (isMyZone(t.clientX)) { touchYRef.current = t.clientY; e.preventDefault(); }
+        if (isMyZone(t.clientX, t.clientY)) {
+          touchYRef.current = horizontalRef.current ? t.clientX : t.clientY;
+          if (!pausedRef.current) e.preventDefault();
+        }
     };
     const onEnd = (e: TouchEvent) => {
-      if (!Array.from(e.touches).some(t => isMyZone(t.clientX))) touchYRef.current = null;
+      const start = touchStartRef.current;
+      if (start && !pausedRef.current) {
+        for (const t of Array.from(e.changedTouches)) {
+          const dx = t.clientX - start.x;
+          const dy = t.clientY - start.y;
+          const elapsed = Date.now() - start.t;
+          if (horizontalRef.current) {
+            // Portrait: vertical swipe = toward/away opponent
+            if (Math.abs(dy) > 38 && Math.abs(dy) > Math.abs(dx) * 1.4 && elapsed < 450) {
+              const towardOpponent = touchZone === "bottom" ? dy < 0 : dy > 0;
+              if (towardOpponent) onShootRef.current?.();
+              else                onRotateRef.current?.();
+            }
+          } else {
+            // Landscape: horizontal swipe = toward/away opponent
+            if (Math.abs(dx) > 38 && Math.abs(dx) > Math.abs(dy) * 1.4 && elapsed < 450) {
+              const towardOpponent = touchZone === "left" ? dx > 0 : dx < 0;
+              if (towardOpponent) onShootRef.current?.();
+              else                onRotateRef.current?.();
+            }
+          }
+        }
+      }
+      touchStartRef.current = null;
+      if (!Array.from(e.touches).some(t => isMyZone(t.clientX, t.clientY))) touchYRef.current = null;
     };
 
     window.addEventListener("touchstart", onStart, { passive: false });
@@ -132,7 +185,7 @@ export default function ManualMover({
       window.removeEventListener("touchmove", onMove);
       window.removeEventListener("touchend", onEnd);
     };
-  }, [touchZone]);
+  }, [touchZone]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [keyUp, setKeyUp] = useState(false);
   const [keyDown, setKeyDown] = useState(false);
@@ -177,25 +230,25 @@ export default function ManualMover({
         return;
       }
 
-      const h = sizeRef.current.h;
-      const maxY = window.innerHeight - h;
-      const minY = 0;
-      const prevY = posYRef.current;
-      let nextY = prevY;
-
-      // Poll gamepad (PS4/Xbox/TV remote) — only when not in externalInput mode
+      // Poll gamepad
       if (!externalInput && gamepadIndexRef.current >= 0) {
         const gp = navigator.getGamepads ? navigator.getGamepads()[gamepadIndexRef.current] : null;
         if (gp) {
-          const ax1    = gp.axes[1] ?? 0;
-          const b12    = gp.buttons[12]?.pressed ?? false; // D-pad up
-          const b13    = gp.buttons[13]?.pressed ?? false; // D-pad down
-          gpUpRef.current   = ax1 < -0.3 || b12;
-          gpDownRef.current = ax1 >  0.3 || b13;
+          if (horizontalRef.current) {
+            // Portrait: left stick X axis + D-pad left/right
+            const ax0    = gp.axes[0] ?? 0;
+            const b14    = gp.buttons[14]?.pressed ?? false;
+            const b15    = gp.buttons[15]?.pressed ?? false;
+            gpUpRef.current   = ax0 < -0.3 || b14;
+            gpDownRef.current = ax0 >  0.3 || b15;
+          } else {
+            const ax1    = gp.axes[1] ?? 0;
+            const b12    = gp.buttons[12]?.pressed ?? false;
+            const b13    = gp.buttons[13]?.pressed ?? false;
+            gpUpRef.current   = ax1 < -0.3 || b12;
+            gpDownRef.current = ax1 >  0.3 || b13;
+          }
 
-          // Rising-edge: shoot = button 0 (Cross/A / OK)
-          //              rotate = button 1 (Circle/B / Back) OR button 2 (Square/X)
-          //              also shoulder buttons: 4 (L1/LB) and 5 (R1/RB) for rotate
           const cur = [
             gp.buttons[0]?.pressed ?? false,
             gp.buttons[1]?.pressed ?? false,
@@ -213,39 +266,84 @@ export default function ManualMover({
         }
       }
 
-      if (!frozenRef.current) {
-        if (externalInput) {
-          // Online mode: use remote player inputs, ignore local keyboard/touch
-          const goingUp   = invertedRef.current ? externalInput.current.down : externalInput.current.up;
-          const goingDown = invertedRef.current ? externalInput.current.up   : externalInput.current.down;
-          if (goingUp && !goingDown)   nextY = Math.max(prevY - vRef.current * dt, minY);
-          else if (goingDown && !goingUp) nextY = Math.min(prevY + vRef.current * dt, maxY);
-        } else if (touchYRef.current !== null) {
-          // Touch: move em direcção ao dedo à velocidade do player
-          const target = Math.max(minY, Math.min(maxY, touchYRef.current - h / 2));
-          const diff = target - prevY;
-          const maxMove = vRef.current * dt;
-          nextY = prevY + Math.max(-maxMove, Math.min(maxMove, diff));
-        } else {
-          // Keyboard merged with gamepad
-          const goingUp   = invertedRef.current ? (keyDownRef.current || gpDownRef.current) : (keyUpRef.current || gpUpRef.current);
-          const goingDown = invertedRef.current ? (keyUpRef.current || gpUpRef.current)     : (keyDownRef.current || gpDownRef.current);
-          if (goingUp && !goingDown)   nextY = Math.max(prevY - vRef.current * dt, minY);
-          else if (goingDown && !goingUp) nextY = Math.min(prevY + vRef.current * dt, maxY);
-        }
-      }
+      if (horizontalRef.current) {
+        // Horizontal mode: move along X axis
+        const h = sizeRef.current.h; // elementHeight = paddle visual width
+        const maxX = window.innerWidth - h;
+        const prevX = posXRef.current;
+        let nextX = prevX;
 
-      // Apply drift (enemy panic effect — player still has control but fights a constant force)
-      if (driftRef.current !== 0) {
-        nextY = Math.max(minY, Math.min(maxY, nextY + driftRef.current * dt));
-      }
-
-      if (nextY !== prevY) {
-        posYRef.current = nextY;
-        if (elRef.current) {
-          elRef.current.style.transform = `translate3d(0,${Math.round(nextY)}px,0)`;
+        if (!frozenRef.current) {
+          if (externalInput) {
+            const goingLeft  = invertedRef.current ? externalInput.current.down : externalInput.current.up;
+            const goingRight = invertedRef.current ? externalInput.current.up   : externalInput.current.down;
+            if (goingLeft && !goingRight)   nextX = Math.max(prevX - vRef.current * dt, 0);
+            else if (goingRight && !goingLeft) nextX = Math.min(prevX + vRef.current * dt, maxX);
+          } else if (touchYRef.current !== null) {
+            // touchYRef stores clientX of finger when horizontal
+            const rawTarget = Math.max(0, Math.min(maxX, touchYRef.current - h / 2));
+            const target = invertedRef.current ? maxX - rawTarget : rawTarget;
+            const diff = target - prevX;
+            const maxMove = vRef.current * dt;
+            nextX = prevX + Math.max(-maxMove, Math.min(maxMove, diff));
+          } else {
+            const goingLeft  = invertedRef.current ? (keyDownRef.current || gpDownRef.current) : (keyUpRef.current || gpUpRef.current);
+            const goingRight = invertedRef.current ? (keyUpRef.current || gpUpRef.current)     : (keyDownRef.current || gpDownRef.current);
+            if (goingLeft && !goingRight)   nextX = Math.max(prevX - vRef.current * dt, 0);
+            else if (goingRight && !goingLeft) nextX = Math.min(prevX + vRef.current * dt, maxX);
+          }
         }
-        if (onVelocityChangeRef.current) onVelocityChangeRef.current((nextY - prevY) / dt);
+
+        if (driftRef.current !== 0) {
+          nextX = Math.max(0, Math.min(maxX, nextX + driftRef.current * dt));
+        }
+
+        if (nextX !== prevX) {
+          posXRef.current = nextX;
+          if (elRef.current) {
+            elRef.current.style.transform = `translate3d(${Math.round(nextX)}px,0,0)`;
+          }
+          if (onVelocityChangeRef.current) onVelocityChangeRef.current((nextX - prevX) / dt);
+        }
+      } else {
+        // Vertical mode (landscape)
+        const h = sizeRef.current.h;
+        const maxY = window.innerHeight - h;
+        const minY = 0;
+        const prevY = posYRef.current;
+        let nextY = prevY;
+
+        if (!frozenRef.current) {
+          if (externalInput) {
+            const goingUp   = invertedRef.current ? externalInput.current.down : externalInput.current.up;
+            const goingDown = invertedRef.current ? externalInput.current.up   : externalInput.current.down;
+            if (goingUp && !goingDown)   nextY = Math.max(prevY - vRef.current * dt, minY);
+            else if (goingDown && !goingUp) nextY = Math.min(prevY + vRef.current * dt, maxY);
+          } else if (touchYRef.current !== null) {
+            const rawTarget = Math.max(minY, Math.min(maxY, touchYRef.current - h / 2));
+            const target = invertedRef.current ? maxY - rawTarget : rawTarget;
+            const diff = target - prevY;
+            const maxMove = vRef.current * dt;
+            nextY = prevY + Math.max(-maxMove, Math.min(maxMove, diff));
+          } else {
+            const goingUp   = invertedRef.current ? (keyDownRef.current || gpDownRef.current) : (keyUpRef.current || gpUpRef.current);
+            const goingDown = invertedRef.current ? (keyUpRef.current || gpUpRef.current)     : (keyDownRef.current || gpDownRef.current);
+            if (goingUp && !goingDown)   nextY = Math.max(prevY - vRef.current * dt, minY);
+            else if (goingDown && !goingUp) nextY = Math.min(prevY + vRef.current * dt, maxY);
+          }
+        }
+
+        if (driftRef.current !== 0) {
+          nextY = Math.max(minY, Math.min(maxY, nextY + driftRef.current * dt));
+        }
+
+        if (nextY !== prevY) {
+          posYRef.current = nextY;
+          if (elRef.current) {
+            elRef.current.style.transform = `translate3d(0,${Math.round(nextY)}px,0)`;
+          }
+          if (onVelocityChangeRef.current) onVelocityChangeRef.current((nextY - prevY) / dt);
+        }
       }
 
       rafRef.current = requestAnimationFrame(tick);
@@ -266,9 +364,11 @@ export default function ManualMover({
       ref={elRef}
       style={{
         position: "fixed",
-        left: initialX,
-        top: 0,
-        transform: `translate3d(0,${Math.round(posYRef.current)}px,0)`,
+        left: horizontal ? 0 : initialX,
+        top: horizontal ? initialY : 0,
+        transform: horizontal
+          ? `translate3d(${Math.round(posXRef.current)}px,0,0)`
+          : `translate3d(0,${Math.round(posYRef.current)}px,0)`,
         willChange: "transform",
         touchAction: "none",
       }}

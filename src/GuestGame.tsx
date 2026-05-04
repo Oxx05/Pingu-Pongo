@@ -149,10 +149,34 @@ export default function GuestGame({ conn, onBack }: { conn: DataConnection; onBa
   // Touch input (right side of screen)
   useEffect(() => {
     const touchYRef = { current: null as number | null };
+    const touchStartRef = { current: null as { x: number; y: number; t: number } | null };
     const isRight = (x: number) => x >= window.innerWidth / 2;
-    const onStart = (e: TouchEvent) => { for (const t of Array.from(e.changedTouches)) if (isRight(t.clientX)) { touchYRef.current = t.clientY; e.preventDefault(); } };
-    const onMove  = (e: TouchEvent) => { for (const t of Array.from(e.touches))        if (isRight(t.clientX)) { touchYRef.current = t.clientY; e.preventDefault(); } };
-    const onEnd   = (e: TouchEvent) => { if (!Array.from(e.touches).some(t => isRight(t.clientX))) touchYRef.current = null; };
+    const onStart = (e: TouchEvent) => {
+      for (const t of Array.from(e.changedTouches))
+        if (isRight(t.clientX)) {
+          touchYRef.current = t.clientY;
+          touchStartRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
+          e.preventDefault();
+        }
+    };
+    const onMove  = (e: TouchEvent) => { for (const t of Array.from(e.touches)) if (isRight(t.clientX)) { touchYRef.current = t.clientY; e.preventDefault(); } };
+    const onEnd   = (e: TouchEvent) => {
+      const start = touchStartRef.current;
+      if (start) {
+        for (const t of Array.from(e.changedTouches)) {
+          const dx = t.clientX - start.x;
+          const dy = t.clientY - start.y;
+          const elapsed = Date.now() - start.t;
+          if (Math.abs(dx) > 38 && Math.abs(dx) > Math.abs(dy) * 1.4 && elapsed < 450) {
+            // P2 está na direita: swipe esquerda = em direção ao adversário = usar
+            if (dx < 0) sendAction("shoot");
+            else        sendAction("rotate");
+          }
+        }
+        touchStartRef.current = null;
+      }
+      if (!Array.from(e.touches).some(t => isRight(t.clientX))) touchYRef.current = null;
+    };
     window.addEventListener("touchstart", onStart, { passive: false });
     window.addEventListener("touchmove",  onMove,  { passive: false });
     window.addEventListener("touchend",   onEnd);

@@ -1,6 +1,5 @@
 html {
   overflow: hidden;
-  position: fixed;
   width: 100%;
   height: 100%;
 }
@@ -12,7 +11,6 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
-  position: fixed;
   width: 100%;
   height: 100%;
   touch-action: none;
@@ -27,12 +25,6 @@ code {
     monospace;
 }
 
-/* Forçar landscape em mobile */
-@media (orientation: portrait) and (max-width: 900px) {
-  .portrait-overlay {
-    display: flex !important;
-  }
-}
 
 @keyframes buff-shrink {
   from { width: 100%; }
