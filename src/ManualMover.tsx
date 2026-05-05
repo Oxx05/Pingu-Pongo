@@ -11,6 +11,7 @@ type ManualMoverProps = {
   onVelocityChange?: (v: number) => void;
   onShoot?: () => void;
   onRotate?: () => void;
+  onDiscard?: () => void;
   touchZone?: "left" | "right" | "top" | "bottom";
   frozen?: boolean;
   inverted?: boolean;
@@ -22,6 +23,8 @@ type ManualMoverProps = {
   gamepadIndex?: number;
   /** Portrait mode: paddle moves horizontally on X axis */
   horizontal?: boolean;
+  /** Inertia mode: paddle continues sliding when key released */
+  inertia?: boolean;
   children: React.ReactNode;
 };
 
@@ -34,6 +37,7 @@ export default function ManualMover({
   onVelocityChange,
   onShoot,
   onRotate,
+  onDiscard,
   touchZone,
   frozen = false,
   inverted = false,
@@ -42,6 +46,7 @@ export default function ManualMover({
   externalInput = null,
   gamepadIndex,
   horizontal = false,
+  inertia = false,
   children,
 }: ManualMoverProps) {
   const vRef = useRef(v);
@@ -62,6 +67,10 @@ export default function ManualMover({
   const horizontalRef = useRef(horizontal);
   useEffect(() => { horizontalRef.current = horizontal; }, [horizontal]);
 
+  const inertiaRef = useRef(inertia);
+  useEffect(() => { inertiaRef.current = inertia; }, [inertia]);
+  const momentumRef = useRef(0);
+
   // Vertical movement (landscape)
   const posYRef = useRef(initialY);
   // Horizontal movement (portrait)
@@ -79,6 +88,8 @@ export default function ManualMover({
   onShootRef.current = onShoot;
   const onRotateRef = useRef(onRotate);
   onRotateRef.current = onRotate;
+  const onDiscardRef = useRef(onDiscard);
+  onDiscardRef.current = onDiscard;
 
   const gamepadIndexRef = useRef(gamepadIndex ?? -1);
   useEffect(() => { gamepadIndexRef.current = gamepadIndex ?? -1; }, [gamepadIndex]);
@@ -135,19 +146,26 @@ export default function ManualMover({
     };
 
     const onStart = (e: TouchEvent) => {
-      for (const t of Array.from(e.changedTouches))
+      for (const t of Array.from(e.changedTouches)) {
+        // Don't intercept touches on interactive UI elements (buttons, links, etc.)
+        const target = t.target as Element;
+        if (target.closest('button, a, input, select, [role="button"]')) continue;
         if (isMyZone(t.clientX, t.clientY)) {
           touchYRef.current = horizontalRef.current ? t.clientX : t.clientY;
           touchStartRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
           if (!pausedRef.current) e.preventDefault();
         }
+      }
     };
     const onMove = (e: TouchEvent) => {
-      for (const t of Array.from(e.touches))
+      for (const t of Array.from(e.touches)) {
+        const target = t.target as Element;
+        if (target.closest('button, a, input, select, [role="button"]')) continue;
         if (isMyZone(t.clientX, t.clientY)) {
           touchYRef.current = horizontalRef.current ? t.clientX : t.clientY;
           if (!pausedRef.current) e.preventDefault();
         }
+      }
     };
     const onEnd = (e: TouchEvent) => {
       const start = touchStartRef.current;
@@ -205,8 +223,9 @@ export default function ManualMover({
     const k = keys.get(e.key) ?? "";
     if (k === "up")     { setKeyUp(false);  keyUpRef.current = false; }
     if (k === "down")   { setKeyDown(false); keyDownRef.current = false; }
-    if (k === "shoot"  && onShoot)  onShoot();
-    if (k === "rotate" && onRotate) onRotate();
+    if (k === "shoot"   && onShoot)   onShoot();
+    if (k === "rotate"  && onRotate)  onRotate();
+    if (k === "discard" && onDiscard) onDiscard();
   };
 
   useEffect(() => {
@@ -313,21 +332,32 @@ export default function ManualMover({
         const prevY = posYRef.current;
         let nextY = prevY;
 
-        if (!frozenRef.current) {
-          if (externalInput) {
-            const goingUp   = invertedRef.current ? externalInput.current.down : externalInput.current.up;
-            const goingDown = invertedRef.current ? externalInput.current.up   : externalInput.current.down;
-            if (goingUp && !goingDown)   nextY = Math.max(prevY - vRef.current * dt, minY);
-            else if (goingDown && !goingUp) nextY = Math.min(prevY + vRef.current * dt, maxY);
-          } else if (touchYRef.current !== null) {
-            const rawTarget = Math.max(minY, Math.min(maxY, touchYRef.current - h / 2));
-            const target = invertedRef.current ? maxY - rawTarget : rawTarget;
-            const diff = target - prevY;
-            const maxMove = vRef.current * dt;
-            nextY = prevY + Math.max(-maxMove, Math.min(maxMove, diff));
+        if (frozenRef.current) {
+          momentumRef.current = 0;
+        } else if (externalInput) {
+          const goingUp   = invertedRef.current ? externalInput.current.down : externalInput.current.up;
+          const goingDown = invertedRef.current ? externalInput.current.up   : externalInput.current.down;
+          if (goingUp && !goingDown)   nextY = Math.max(prevY - vRef.current * dt, minY);
+          else if (goingDown && !goingUp) nextY = Math.min(prevY + vRef.current * dt, maxY);
+        } else if (touchYRef.current !== null) {
+          const rawTarget = Math.max(minY, Math.min(maxY, touchYRef.current - h / 2));
+          const target = invertedRef.current ? maxY - rawTarget : rawTarget;
+          const diff = target - prevY;
+          const maxMove = vRef.current * dt;
+          nextY = prevY + Math.max(-maxMove, Math.min(maxMove, diff));
+        } else {
+          const goingUp   = invertedRef.current ? (keyDownRef.current || gpDownRef.current) : (keyUpRef.current || gpUpRef.current);
+          const goingDown = invertedRef.current ? (keyUpRef.current || gpUpRef.current)     : (keyDownRef.current || gpDownRef.current);
+          if (inertiaRef.current) {
+            const pressing = (goingUp && !goingDown) ? -1 : (goingDown && !goingUp) ? 1 : 0;
+            if (pressing !== 0) {
+              momentumRef.current = pressing * vRef.current;
+            } else {
+              momentumRef.current *= Math.pow(0.15, dt);
+              if (Math.abs(momentumRef.current) < 5) momentumRef.current = 0;
+            }
+            nextY = Math.max(minY, Math.min(maxY, prevY + momentumRef.current * dt));
           } else {
-            const goingUp   = invertedRef.current ? (keyDownRef.current || gpDownRef.current) : (keyUpRef.current || gpUpRef.current);
-            const goingDown = invertedRef.current ? (keyUpRef.current || gpUpRef.current)     : (keyDownRef.current || gpDownRef.current);
             if (goingUp && !goingDown)   nextY = Math.max(prevY - vRef.current * dt, minY);
             else if (goingDown && !goingUp) nextY = Math.min(prevY + vRef.current * dt, maxY);
           }

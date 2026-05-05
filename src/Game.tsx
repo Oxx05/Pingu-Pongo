@@ -40,6 +40,14 @@ import {
   Magnet,
   TrendingUp,
   ArrowUpDown,
+  EyeOff,
+  Wind,
+  RotateCw,
+  RefreshCcw,
+  Anchor,
+  GitBranch,
+  Crosshair,
+  Columns,
 } from "lucide-react";
 
 const isTouchDevice = typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
@@ -47,26 +55,76 @@ const SLOW_FACTOR = 0.22;
 
 type Brick = { id: string; x: number; y: number; w: number; h: number; color: string };
 
-function initBricks(w: number, h: number): Brick[] {
-  const cols = 5, rows = 4;
-  const gap = 6;
-  const bw = Math.max(48, Math.floor(w * 0.075));
-  const bh = Math.max(20, Math.floor(h * 0.065));
+// Brick layout patterns — rows × cols grid (1 = brick, 0 = empty)
+const SOLO_LAYOUTS: number[][][] = [
+  // 0: CLÁSSICO — 7×5 full grid
+  [[1,1,1,1,1,1,1],
+   [1,1,1,1,1,1,1],
+   [1,1,1,1,1,1,1],
+   [1,1,1,1,1,1,1],
+   [1,1,1,1,1,1,1]],
+  // 1: DIAMANTE
+  [[0,0,1,1,1,0,0],
+   [0,1,1,1,1,1,0],
+   [1,1,1,1,1,1,1],
+   [0,1,1,1,1,1,0],
+   [0,0,1,1,1,0,0]],
+  // 2: FORTALEZA — hollow with inner block
+  [[1,1,1,1,1,1,1],
+   [1,0,0,0,0,0,1],
+   [1,0,1,1,1,0,1],
+   [1,0,0,0,0,0,1],
+   [1,1,1,1,1,1,1]],
+  // 3: PIRÂMIDE — wide base at top
+  [[1,1,1,1,1,1,1],
+   [0,1,1,1,1,1,0],
+   [0,0,1,1,1,0,0],
+   [0,0,0,1,0,0,0],
+   [0,0,0,0,0,0,0]],
+];
+const BRICK_ROW_COLORS = ["#ff6b6b", "#ff9f43", "#ffd43b", "#51cf66", "#339af0"];
+
+function initBricks(w: number, h: number, layout: number, portrait: boolean): Brick[] {
+  const pattern = SOLO_LAYOUTS[layout % SOLO_LAYOUTS.length];
+  const rows = pattern.length;
+  const cols = pattern[0].length;
+  const gap = Math.max(4, Math.round(Math.min(w, h) * 0.007));
+
+  let areaX0: number, areaX1: number, areaY0: number, areaY1: number;
+  if (portrait) {
+    // Place bricks in top portion of screen (player is at bottom)
+    const padOff = Math.round(Math.min(60, h * 0.08));
+    const padH  = Math.round(Math.min(14, w * 0.038));
+    areaX0 = Math.round(w * 0.04);
+    areaX1 = Math.round(w * 0.96);
+    areaY0 = padOff + padH + 20;
+    areaY1 = Math.round(h * 0.48);
+  } else {
+    // Place bricks in center area (player is on left, right wall bounces)
+    areaX0 = Math.round(w * 0.22);
+    areaX1 = Math.round(w * 0.88);
+    areaY0 = Math.round(h * 0.08);
+    areaY1 = Math.round(h * 0.92);
+  }
+
+  const bw = Math.floor((areaX1 - areaX0 - (cols - 1) * gap) / cols);
+  const bh = Math.floor((areaY1 - areaY0 - (rows - 1) * gap) / rows);
   const totalW = cols * bw + (cols - 1) * gap;
   const totalH = rows * bh + (rows - 1) * gap;
-  const startX = Math.floor((w - totalW) / 2);
-  const startY = Math.floor((h - totalH) / 2);
-  const rowColors = ["#ff6b6b", "#ff9f43", "#ffd43b", "#51cf66"];
+  const startX = areaX0 + Math.floor((areaX1 - areaX0 - totalW) / 2);
+  const startY = areaY0 + Math.floor((areaY1 - areaY0 - totalH) / 2);
+
   const bricks: Brick[] = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
+      if (!pattern[r][c]) continue;
       bricks.push({
         id: `${r}-${c}`,
         x: startX + c * (bw + gap),
         y: startY + r * (bh + gap),
         w: bw,
         h: bh,
-        color: rowColors[r],
+        color: BRICK_ROW_COLORS[r % BRICK_ROW_COLORS.length],
       });
     }
   }
@@ -84,6 +142,8 @@ type ItemEntry = {
   color: string;
   onCatch: (player: PlayerId) => void;
   canUse?: (player: PlayerId) => boolean;
+  /** Checked before consuming the slot — return false to block without spending the item */
+  canActivate?: (player: PlayerId) => boolean;
   onBallCollide?: () => void;
 };
 
@@ -96,7 +156,7 @@ type SpawnedItem = ItemEntry & {
   radius: number;
 };
 
-type StoredSlot = Pick<ItemEntry, "icon" | "color" | "onCatch" | "canUse">;
+type StoredSlot = Pick<ItemEntry, "icon" | "color" | "onCatch" | "canUse" | "canActivate">;
 
 type ActiveBuff = {
   key: string;
@@ -144,7 +204,15 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   const BALL_RADIUS = isTouchDevice ? Math.round(Math.min(14, vh * 0.02)) : Math.round(Math.min(20, vh * 0.028));
   const BALL_RADIUS_BIG = Math.round(BALL_RADIUS * 2.2);
   const BALL_RADIUS_MINI = Math.round(BALL_RADIUS * 0.45);
-  const START_BALL_SPEED = config.initialSpeed;
+  // Scale ball speed to screen size so crossing time feels consistent across devices.
+  // Reference: 900px in the main travel axis (width for landscape, height for portrait).
+  // Use window directly here (isPortrait state is declared later in the component).
+  const _currentlyPortrait = window.innerWidth < window.innerHeight;
+  const SPEED_SCALE = Math.min(1.4, Math.max(0.6, (_currentlyPortrait ? vh : vw) / 900));
+  const START_BALL_SPEED = config.initialSpeed * SPEED_SCALE;
+  // Keep a ref so RAF closures (applyFrontCollision) always see the current scaled speed.
+  const startBallSpeedRef = useRef(START_BALL_SPEED);
+  startBallSpeedRef.current = START_BALL_SPEED;
   const BASE_PADDLE_HEIGHT = isTouchDevice ? Math.round(Math.min(160, vh * 0.25)) : Math.round(Math.min(200, vh * 0.32));
   const BASE_PADDLE_WIDTH = isTouchDevice ? Math.round(Math.min(14, vh * 0.03)) : Math.round(Math.min(20, vh * 0.04));
   const ITEM_RADIUS = Math.round(Math.min(18, vh * 0.04));
@@ -175,8 +243,9 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   const rallyHitsRef = useRef(0);
   const [rallyHits, setRallyHits] = useState(0);
   // Solo bricks
-  const bricksRef = useRef<Brick[]>(config.mode === "solo" ? initBricks(vw, vh) : []);
-  const [bricks, setBricks] = useState<Brick[]>(() => config.mode === "solo" ? initBricks(vw, vh) : []);
+  const soloLayout = config.soloLayout ?? 0;
+  const bricksRef = useRef<Brick[]>(config.mode === "solo" ? initBricks(vw, vh, soloLayout, window.innerWidth < window.innerHeight) : []);
+  const [bricks, setBricks] = useState<Brick[]>(() => config.mode === "solo" ? initBricks(vw, vh, soloLayout, window.innerWidth < window.innerHeight) : []);
 
   useEffect(() => { current1Ref.current = current1; }, [current1]);
   useEffect(() => { current2Ref.current = current2; }, [current2]);
@@ -230,7 +299,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [decoys.length]);
 
-  const [isPortrait, setIsPortrait] = useState(() => window.innerWidth < window.innerHeight && window.innerWidth <= 900);
+  const [isPortrait, setIsPortrait] = useState(() => window.innerWidth < window.innerHeight);
   const isPortraitRef = useRef(isPortrait);
   useEffect(() => { isPortraitRef.current = isPortrait; }, [isPortrait]);
 
@@ -239,6 +308,9 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   const timeoutByKeyRef = useRef<Record<string, number | null>>({});
   const buffCleanupRef = useRef<Record<string, number | null>>({});
+  const [gamePaused, setGamePaused] = useState(false);
+  const gamePausedRef = useRef(false);
+  useEffect(() => { gamePausedRef.current = gamePaused; }, [gamePaused]);
   const isPausedRef = useRef(false);
   const slowCountRef = useRef(0);
   const slowSavedSpeedRef = useRef(0);
@@ -259,6 +331,9 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   const turbineSavedSpeedRef = useRef(0);
   const vyAccelRef = useRef(0);
   const itemSpawnTimeoutRef = useRef<number | null>(null);
+  const ballLaunchTimerRef = useRef<number | null>(null);
+  // When true, first paddle hit restores full speed (post-spawn slow start)
+  const spawnSlowRef = useRef(false);
   const itemPickupRafRef = useRef<number | null>(null);
   const activeItemsRef = useRef<SpawnedItem[]>([]);
 
@@ -279,6 +354,23 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   const collisionRafRef = useRef<number | null>(null);
   const cooldownRef = useRef(0);
   const lastTouchRef = useRef<PlayerId>("player1");
+  const lastHitTimeRef = useRef(0);
+
+  // New item refs
+  const overchargeRef = useRef<PlayerId | null>(null);
+  const curveShotRef = useRef<{ player: PlayerId; count: number } | null>(null);
+  const repulsorRef = useRef<PlayerId | null>(null);
+  const vortexRef = useRef<PlayerId | null>(null);
+  const barrierActiveRef = useRef<PlayerId | null>(null);
+  const reflexoRef = useRef<PlayerId | null>(null);
+  const divisorRef = useRef<PlayerId | null>(null);
+  const tempestadeIntervalRef = useRef<number | null>(null);
+
+  const [paddleHidden, setPaddleHidden] = useState<PlayerId | null>(null);
+  const [barrierActive, setBarrierActive] = useState<PlayerId | null>(null);
+  const [frenagemActive, setFrenagemActive] = useState<PlayerMapBool>({ player1: false, player2: false });
+  const frenagemActiveRef = useRef<PlayerMapBool>({ player1: false, player2: false });
+  useEffect(() => { frenagemActiveRef.current = frenagemActive; }, [frenagemActive]);
 
   function opposite(player: PlayerId): PlayerId {
     return player === "player1" ? "player2" : "player1";
@@ -372,6 +464,20 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     vyAccelRef.current = 0;
     cooldownRef.current = 0;
     lastTouchRef.current = "player1";
+    lastHitTimeRef.current = 0;
+    overchargeRef.current = null;
+    curveShotRef.current = null;
+    repulsorRef.current = null;
+    vortexRef.current = null;
+    barrierActiveRef.current = null;
+    reflexoRef.current = null;
+    divisorRef.current = null;
+    if (tempestadeIntervalRef.current !== null) { clearInterval(tempestadeIntervalRef.current); tempestadeIntervalRef.current = null; }
+    if (ballLaunchTimerRef.current !== null) { clearTimeout(ballLaunchTimerRef.current); ballLaunchTimerRef.current = null; }
+    setPaddleHidden(null);
+    setBarrierActive(null);
+    setFrenagemActive({ player1: false, player2: false });
+    frenagemActiveRef.current = { player1: false, player2: false };
     prevBallCxRef.current = null;
     prevBallCyRef.current = null;
     activeItemsRef.current = [];
@@ -379,18 +485,21 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     rallyHitsRef.current = 0;
     setRallyHits(0);
     if (config.mode === "solo") {
-      const newBricks = initBricks(window.innerWidth, window.innerHeight);
+      const newBricks = initBricks(window.innerWidth, window.innerHeight, soloLayout, isPortraitRef.current);
       bricksRef.current = newBricks;
       setBricks(newBricks);
     }
-    setBallDirectionWithSpeed(START_BALL_SPEED);
-    if (config.mode === "solo") {
-      if (isPortraitRef.current) {
-        VyRef.current = -Math.abs(VyRef.current); // portrait: go up toward bricks
-      } else {
-        VxRef.current = Math.abs(VxRef.current); // landscape: go right toward bricks
-      }
-    }
+    VxRef.current = 0;
+    VyRef.current = 0;
+    spawnSlowRef.current = false;
+    cooldownRef.current = 60;
+    if (ballLaunchTimerRef.current !== null) clearTimeout(ballLaunchTimerRef.current);
+    ballLaunchTimerRef.current = window.setTimeout(() => {
+      setBallDirectionWithSpeed(START_BALL_SPEED / 2, config.mode === "solo" ? "player2" : null);
+      spawnSlowRef.current = true;
+      cooldownRef.current = 20;
+      ballLaunchTimerRef.current = null;
+    }, 800);
     setScore([0, 0]);
     setBallRadius(BALL_RADIUS);
     setGoalMultiplier({ player1: 1, player2: 1 });
@@ -411,6 +520,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     setNotifications([]);
     setShots([]);
     setBallGhost(false);
+    setGamePaused(false);
     setWinner(null);
   }
 
@@ -420,6 +530,9 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       setWinner("player2");
       return;
     }
+    const conceding = opposite(scored);
+
+    // Score
     const amount = goalMultiplier[scored];
     const newScore: [number, number] = scored === "player1"
       ? [scoreRef.current[0] + amount, scoreRef.current[1]]
@@ -427,24 +540,89 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     scoreRef.current = newScore;
     setScore(newScore);
     setGoalMultiplier(prev => ({ ...prev, [scored]: 1 }));
-    for (const p of ["player1", "player2"] as PlayerId[]) {
-      const dk = `distort:${p}`;
-      const dt = timeoutByKeyRef.current[dk];
-      if (dt) { clearTimeout(dt); timeoutByKeyRef.current[dk] = null; }
-      const db = buffCleanupRef.current[dk];
-      if (db) { clearTimeout(db); buffCleanupRef.current[dk] = null; }
+
+    // Cancel timeouts belonging to the conceding player + all distortion
+    for (const k of Object.keys(timeoutByKeyRef.current)) {
+      if (k.endsWith(`:${conceding}`) || k.startsWith("distort:")) {
+        const id = timeoutByKeyRef.current[k];
+        if (id != null) clearTimeout(id);
+        timeoutByKeyRef.current[k] = null;
+      }
     }
+    for (const k of Object.keys(buffCleanupRef.current)) {
+      if (k.endsWith(`:${conceding}`)) {
+        const id = buffCleanupRef.current[k];
+        if (id != null) clearTimeout(id);
+        buffCleanupRef.current[k] = null;
+      }
+    }
+
+    // Clear ball-wide effect state (ball resets anyway)
+    bigBallCountRef.current = 0;
+    miniBallCountRef.current = 0;
+    ghostCountRef.current = 0;
+    turbineCountRef.current = 0;
+    turbineSavedSpeedRef.current = 0;
+    fireActiveRef.current = false;
+    magnetRef.current = null;
     if (distortionIntervalRef.current !== null) {
       clearInterval(distortionIntervalRef.current);
       distortionIntervalRef.current = null;
     }
     distortionSavedSpeedRef.current = 0;
-    setActiveBuffs(prev => prev.filter(b => !b.key.startsWith("distort:")));
-    setBallDirectionWithSpeed(START_BALL_SPEED);
+    // Slow: clear entirely (ball speed resets; conceding player loses their speed debuff)
+    slowCountRef.current = 0;
+    slowSavedSpeedRef.current = 0;
+    slowSavedPlayerSpeedRef.current = { player1: 1, player2: 1 };
+    setPlayerSpeedMultiplier(prev => ({ ...prev, [conceding]: 1 }));
+
+    // Clear conceding player's per-player effects
+    frozenStateRef.current[conceding] = false;
+    setFrozen(prev => ({ ...prev, [conceding]: false }));
+    setInverted(prev => ({ ...prev, [conceding]: false }));
+    setDrift(prev => ({ ...prev, [conceding]: 0 }));
+    setPlayerSizeMultiplier(prev => ({ ...prev, [conceding]: 1 }));
+    setShieldActive(prev => ({ ...prev, [conceding]: false }));
+    if (shieldActiveRefH.current) shieldActiveRefH.current[conceding] = false;
+
+    // Clear new effect refs for conceding player
+    if (overchargeRef.current === conceding) overchargeRef.current = null;
+    if (curveShotRef.current?.player === conceding) curveShotRef.current = null;
+    if (repulsorRef.current === conceding) repulsorRef.current = null;
+    if (vortexRef.current === conceding) vortexRef.current = null;
+    if (reflexoRef.current === conceding) reflexoRef.current = null;
+    if (divisorRef.current === conceding) divisorRef.current = null;
+    if (barrierActiveRef.current === conceding) { barrierActiveRef.current = null; setBarrierActive(null); }
+    if (tempestadeIntervalRef.current !== null) { clearInterval(tempestadeIntervalRef.current); tempestadeIntervalRef.current = null; }
+    setFrenagemActive(prev => ({ ...prev, [conceding]: false }));
+    frenagemActiveRef.current = { ...frenagemActiveRef.current, [conceding]: false };
+    setPaddleHidden(prev => prev === conceding ? null : prev);
+
+    // Clear ball visual state
+    setBallRadius(BALL_RADIUS);
+    setBallGhost(false);
+    setDecoys([]);
+    setTeleportY(null);
+    setShots([]);
+    // Remove conceding player's active buffs; keep scorer's
+    setActiveBuffs(prev => prev.filter(b => b.player !== conceding));
+
+    // Ball stays at centre briefly, then launches slow — first touch restores full speed
     vyAccelRef.current = 0;
     prevBallCxRef.current = null;
     prevBallCyRef.current = null;
-    cooldownRef.current = 30;
+    VxRef.current = 0;
+    VyRef.current = 0;
+    spawnSlowRef.current = false;
+    cooldownRef.current = 60;
+    if (ballLaunchTimerRef.current !== null) clearTimeout(ballLaunchTimerRef.current);
+    ballLaunchTimerRef.current = window.setTimeout(() => {
+      if (winnerRef.current !== null) return;
+      setBallDirectionWithSpeed(START_BALL_SPEED / 2, conceding);
+      spawnSlowRef.current = true;
+      cooldownRef.current = 20;
+      ballLaunchTimerRef.current = null;
+    }, 800);
 
     if (configRef.current.goalsToWin > 0) {
       const pts = scored === "player1" ? newScore[0] : newScore[1];
@@ -452,23 +630,28 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     }
   }
 
-  function setBallDirectionWithSpeed(speed: number) {
-    const minAbsCos = 0.3;
-    let angle = 0;
-    let cosAbs = 0;
+  // towardPlayer: which side the ball should head toward (null = random).
+  // Main axis gets 70-90% of speed so the ball isn't launched at a steep corner angle.
+  function setBallDirectionWithSpeed(speed: number, towardPlayer?: PlayerId | null) {
+    const mainFrac = 0.70 + Math.random() * 0.20; // 70-90% in main axis
+    const secFrac  = Math.sqrt(Math.max(0, 1 - mainFrac * mainFrac));
+    const secSign  = Math.random() < 0.5 ? 1 : -1;
 
-    for (let i = 0; i < 20; i++) {
-      angle = Math.random() * Math.PI * 2;
-      cosAbs = Math.abs(Math.cos(angle));
-      if (cosAbs >= minAbsCos) break;
+    if (isPortraitRef.current) {
+      // Portrait: Vy is main axis; P1 at bottom (positive Vy), P2 at top (negative Vy)
+      const mainSign = towardPlayer === "player1" ? 1
+                     : towardPlayer === "player2" ? -1
+                     : (Math.random() < 0.5 ? 1 : -1);
+      VyRef.current = mainSign * mainFrac * speed;
+      VxRef.current = secSign  * secFrac  * speed;
+    } else {
+      // Landscape: Vx is main axis; P1 at left (negative Vx), P2 at right (positive Vx)
+      const mainSign = towardPlayer === "player1" ? -1
+                     : towardPlayer === "player2" ?  1
+                     : (Math.random() < 0.5 ? 1 : -1);
+      VxRef.current = mainSign * mainFrac * speed;
+      VyRef.current = secSign  * secFrac  * speed;
     }
-
-    if (cosAbs < minAbsCos) {
-      angle = Math.random() < 0.5 ? Math.PI / 4 : (3 * Math.PI) / 4;
-    }
-
-    VxRef.current = Math.cos(angle) * speed;
-    VyRef.current = Math.sin(angle) * speed;
   }
 
   function randomDirection() {
@@ -478,21 +661,24 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   function timerChange(player: PlayerId) {
     const key = `timer:${player}`;
-    if (timeoutByKeyRef.current[key]) return;
+    const alreadyActive = !!timeoutByKeyRef.current[key];
 
-    if (slowCountRef.current === 0) {
-      slowSavedSpeedRef.current = Math.max(Math.hypot(VxRef.current, VyRef.current), START_BALL_SPEED);
-      VxRef.current *= SLOW_FACTOR;
-      VyRef.current *= SLOW_FACTOR;
-      slowMaxSpeedRef.current = slowSavedSpeedRef.current * SLOW_FACTOR;
-      slowSavedPlayerSpeedRef.current = { ...playerSpeedMultiplier };
-      setPlayerSpeedMultiplier(prev => ({ player1: prev.player1 * SLOW_FACTOR, player2: prev.player2 * SLOW_FACTOR }));
+    if (!alreadyActive) {
+      if (slowCountRef.current === 0) {
+        slowSavedSpeedRef.current = Math.max(Math.hypot(VxRef.current, VyRef.current), START_BALL_SPEED);
+        VxRef.current *= SLOW_FACTOR;
+        VyRef.current *= SLOW_FACTOR;
+        slowMaxSpeedRef.current = slowSavedSpeedRef.current * SLOW_FACTOR;
+        slowSavedPlayerSpeedRef.current = { ...playerSpeedMultiplier };
+        setPlayerSpeedMultiplier(prev => ({ player1: prev.player1 * SLOW_FACTOR, player2: prev.player2 * SLOW_FACTOR }));
+      }
+      slowCountRef.current++;
+      notify("⏱ CÂMARA LENTA", "#91a7ff", player);
+      notify("⏱ CÂMARA LENTA", "#91a7ff", opposite(player));
     }
-    slowCountRef.current++;
 
+    if (alreadyActive) clearTimeout(timeoutByKeyRef.current[key]!);
     addBuff(key, "CÂMARA", TimerReset, "#91a7ff", player, 4000);
-    notify("⏱ CÂMARA LENTA", "#91a7ff", player);
-    notify("⏱ CÂMARA LENTA", "#91a7ff", opposite(player));
     timeoutByKeyRef.current[key] = window.setTimeout(() => {
       slowCountRef.current--;
       if (slowCountRef.current === 0) {
@@ -621,12 +807,15 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   function distortion(player: PlayerId) {
     const key = `distort:${player}`;
-    if (timeoutByKeyRef.current[key]) return;
+    const alreadyActive = !!timeoutByKeyRef.current[key];
+    // Restart interval from scratch (resets oscillation phase cleanly)
     if (distortionIntervalRef.current !== null) {
       clearInterval(distortionIntervalRef.current);
       distortionIntervalRef.current = null;
     }
-    distortionSavedSpeedRef.current = Math.max(Math.hypot(VxRef.current, VyRef.current), 100);
+    if (!alreadyActive) {
+      distortionSavedSpeedRef.current = Math.max(Math.hypot(VxRef.current, VyRef.current), 100);
+    }
     let toggle = false;
     distortionIntervalRef.current = window.setInterval(() => {
       toggle = !toggle;
@@ -637,6 +826,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         VyRef.current = VyRef.current / cur * target;
       }
     }, 480);
+    if (alreadyActive) clearTimeout(timeoutByKeyRef.current[key]!);
     addBuff(key, "DISTORÇÃO", Activity, "#74c0fc", player, 6000);
     timeoutByKeyRef.current[key] = window.setTimeout(() => {
       if (distortionIntervalRef.current !== null) {
@@ -669,7 +859,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   function echoItem(player: PlayerId) {
     const key = `echo:${player}`;
-    if (timeoutByKeyRef.current[key]) return;
+    const alreadyActive = !!timeoutByKeyRef.current[key];
     const speed = Math.hypot(VxRef.current, VyRef.current);
     const newDecoys: Decoy[] = Array.from({ length: 3 }, (_, i) => {
       const angle = (Math.PI * 2 / 3) * i + Math.random() * 0.9;
@@ -682,9 +872,10 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         vy: Math.sin(angle) * speed,
       };
     });
-    setDecoys(newDecoys);
+    setDecoys(newDecoys); // replace decoys with fresh ones
+    if (alreadyActive) clearTimeout(timeoutByKeyRef.current[key]!);
     addBuff(key, "ECO", Copy, "#ffd43b", player, 8000);
-    notify("👁 ECO — qual é a real?", "#ffd43b", opposite(player));
+    if (!alreadyActive) notify("👁 ECO — qual é a real?", "#ffd43b", opposite(player));
     timeoutByKeyRef.current[key] = window.setTimeout(() => {
       setDecoys([]);
       timeoutByKeyRef.current[key] = null;
@@ -724,8 +915,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   function miniBall(player: PlayerId) {
     const key = `miniball:${player}`;
-    if (timeoutByKeyRef.current[key]) return;
-    miniBallCountRef.current++;
+    if (!timeoutByKeyRef.current[key]) miniBallCountRef.current++;
     setTimedEffect(
       key, 5000,
       () => { if (bigBallCountRef.current === 0) setBallRadius(BALL_RADIUS_MINI); },
@@ -755,8 +945,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   function bigBall(player: PlayerId) {
     const key = `bigball:${player}`;
-    if (timeoutByKeyRef.current[key]) return;
-    bigBallCountRef.current++;
+    if (!timeoutByKeyRef.current[key]) bigBallCountRef.current++;
     setTimedEffect(
       key, 6000,
       () => setBallRadius(BALL_RADIUS_BIG),
@@ -806,7 +995,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   function teleport(player: PlayerId) {
     const key = `teleport:${player}`;
-    if (timeoutByKeyRef.current[key]) return;
+    if (timeoutByKeyRef.current[key]) clearTimeout(timeoutByKeyRef.current[key]!);
     const margin = 80;
     const newY = Math.round(margin + Math.random() * (window.innerHeight - margin * 2 - BALL_RADIUS * 2));
     setTeleportY(newY);
@@ -816,19 +1005,21 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   function turbine(player: PlayerId) {
     const key = `turbine:${player}`;
-    if (timeoutByKeyRef.current[key]) return;
+    const alreadyActive = !!timeoutByKeyRef.current[key];
 
-    if (turbineCountRef.current === 0) {
-      turbineSavedSpeedRef.current = Math.max(Math.hypot(VxRef.current, VyRef.current), START_BALL_SPEED);
+    if (!alreadyActive) {
+      if (turbineCountRef.current === 0) {
+        turbineSavedSpeedRef.current = Math.max(Math.hypot(VxRef.current, VyRef.current), START_BALL_SPEED);
+      }
+      turbineCountRef.current++;
+      const currentSpeed = Math.hypot(VxRef.current, VyRef.current);
+      if (currentSpeed > 0) {
+        VxRef.current = VxRef.current / currentSpeed * 1050;
+        VyRef.current = VyRef.current / currentSpeed * 1050;
+      }
     }
-    turbineCountRef.current++;
 
-    const currentSpeed = Math.hypot(VxRef.current, VyRef.current);
-    if (currentSpeed > 0) {
-      VxRef.current = VxRef.current / currentSpeed * 1050;
-      VyRef.current = VyRef.current / currentSpeed * 1050;
-    }
-
+    if (alreadyActive) clearTimeout(timeoutByKeyRef.current[key]!);
     addBuff(key, "TURBINE", Flame, "#ff7b54", player, 3000);
     timeoutByKeyRef.current[key] = window.setTimeout(() => {
       turbineCountRef.current--;
@@ -844,10 +1035,147 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     }, 3000);
   }
 
-  const itemPool: ItemEntry[] = [
-    { id: "random-direction", icon: Shuffle,      color: "#ffd43b", onCatch: ()  => randomDirection() },
+  function overcharge(player: PlayerId) {
+    overchargeRef.current = player;
+    const key = `overcharge:${player}`;
+    if (timeoutByKeyRef.current[key]) clearTimeout(timeoutByKeyRef.current[key]!);
+    addBuff(key, "SOBRECARGA", Zap, "#f59f00", player, 10000);
+    timeoutByKeyRef.current[key] = window.setTimeout(() => {
+      if (overchargeRef.current === player) overchargeRef.current = null;
+      timeoutByKeyRef.current[key] = null;
+    }, 10000);
+    notify("⚡ SOBRECARGA", "#f59f00", player);
+  }
+
+  function curveShotItem(player: PlayerId) {
+    curveShotRef.current = { player, count: 3 };
+    const key = `curveshot:${player}`;
+    if (timeoutByKeyRef.current[key]) clearTimeout(timeoutByKeyRef.current[key]!);
+    addBuff(key, "TIRO CURVO", Crosshair, "#ff9f43", player, 12000);
+    timeoutByKeyRef.current[key] = window.setTimeout(() => {
+      if (curveShotRef.current?.player === player) curveShotRef.current = null;
+      timeoutByKeyRef.current[key] = null;
+    }, 12000);
+    notify("🎯 TIRO CURVO", "#ff9f43", player);
+  }
+
+  function repulsorItem(player: PlayerId) {
+    const key = `repulsor:${player}`;
+    setTimedEffect(
+      key, 6000,
+      () => { repulsorRef.current = player; },
+      () => { if (repulsorRef.current === player) repulsorRef.current = null; },
+      { label: "REPULSOR", icon: Magnet, color: "#f06595", player }
+    );
+  }
+
+  function paddleGhostItem(player: PlayerId) {
+    const enemy = opposite(player);
+    const key = `paddleghost:${enemy}`;
+    setTimedEffect(
+      key, 5000,
+      () => setPaddleHidden(enemy),
+      () => setPaddleHidden(prev => prev === enemy ? null : prev),
+      { label: "INVISÍVEL", icon: EyeOff, color: "#a9e34b", player: enemy }
+    );
+    notify("👁 INVISÍVEL", "#a9e34b", enemy);
+  }
+
+  function vorticeItem(player: PlayerId) {
+    const key = `vortex:${player}`;
+    setTimedEffect(
+      key, 7000,
+      () => { vortexRef.current = player; },
+      () => { if (vortexRef.current === player) vortexRef.current = null; },
+      { label: "VÓRTICE", icon: RotateCw, color: "#74c0fc", player }
+    );
+  }
+
+  function barreiraItem(player: PlayerId) {
+    const key = `barrier:${player}`;
+    const alreadyActive = !!timeoutByKeyRef.current[key];
+    if (alreadyActive) clearTimeout(timeoutByKeyRef.current[key]!);
+    setBarrierActive(player);
+    barrierActiveRef.current = player;
+    addBuff(key, "BARREIRA", Columns, "#e599f7", player, 8000);
+    timeoutByKeyRef.current[key] = window.setTimeout(() => {
+      setBarrierActive(null);
+      barrierActiveRef.current = null;
+      timeoutByKeyRef.current[key] = null;
+    }, 8000);
+    if (!alreadyActive) notify("| BARREIRA |", "#e599f7", opposite(player));
+  }
+
+  function reflexoItem(player: PlayerId) {
+    const key = `reflexo:${player}`;
+    setTimedEffect(
+      key, 6000,
+      () => { reflexoRef.current = player; },
+      () => { if (reflexoRef.current === player) reflexoRef.current = null; },
+      { label: "REFLEXO", icon: RefreshCcw, color: "#ff8787", player }
+    );
+  }
+
+  function frenagemItem(player: PlayerId) {
+    const enemy = opposite(player);
+    const key = `frenagem:${enemy}`;
+    setTimedEffect(
+      key, 7000,
+      () => {
+        setFrenagemActive(prev => ({ ...prev, [enemy]: true }));
+        frenagemActiveRef.current = { ...frenagemActiveRef.current, [enemy]: true };
+      },
+      () => {
+        setFrenagemActive(prev => ({ ...prev, [enemy]: false }));
+        frenagemActiveRef.current = { ...frenagemActiveRef.current, [enemy]: false };
+      },
+      { label: "FRENAGEM", icon: Anchor, color: "#868e96", player: enemy }
+    );
+    notify("⚓ FRENAGEM", "#868e96", enemy);
+  }
+
+  function tempestadeItem(player: PlayerId) {
+    const key = `tempestade:${player}`;
+    const alreadyActive = !!timeoutByKeyRef.current[key];
+    if (tempestadeIntervalRef.current !== null) clearInterval(tempestadeIntervalRef.current);
+    tempestadeIntervalRef.current = window.setInterval(() => {
+      const speed = Math.hypot(VxRef.current, VyRef.current);
+      if (speed > 0) {
+        const deflect = (Math.random() * 2 - 1) * (7 * Math.PI / 180);
+        const angle = Math.atan2(VyRef.current, VxRef.current) + deflect;
+        VxRef.current = Math.cos(angle) * speed;
+        VyRef.current = Math.sin(angle) * speed;
+      }
+    }, 100);
+    if (alreadyActive) clearTimeout(timeoutByKeyRef.current[key]!);
+    addBuff(key, "TEMPESTADE", Wind, "#4dabf7", player, 5000);
+    timeoutByKeyRef.current[key] = window.setTimeout(() => {
+      if (tempestadeIntervalRef.current !== null) { clearInterval(tempestadeIntervalRef.current); tempestadeIntervalRef.current = null; }
+      timeoutByKeyRef.current[key] = null;
+    }, 5000);
+    if (!alreadyActive) notify("⛈ TEMPESTADE", "#4dabf7", opposite(player));
+  }
+
+  function divisorItem(player: PlayerId) {
+    divisorRef.current = player;
+    const key = `divisor:${player}`;
+    if (timeoutByKeyRef.current[key]) clearTimeout(timeoutByKeyRef.current[key]!);
+    addBuff(key, "DIVISOR", GitBranch, "#63e6be", player, 10000);
+    timeoutByKeyRef.current[key] = window.setTimeout(() => {
+      if (divisorRef.current === player) divisorRef.current = null;
+      timeoutByKeyRef.current[key] = null;
+    }, 10000);
+    notify("⑂ DIVISOR", "#63e6be", player);
+  }
+
+  const allItemPool: ItemEntry[] = [
+    { id: "random-direction", icon: Shuffle,   color: "#ffd43b",
+      canActivate: () => Date.now() - lastHitTimeRef.current >= 1500,
+      onCatch: () => randomDirection() },
     { id: "timer-change",     icon: TimerReset,   color: "#91a7ff", onCatch: (p) => timerChange(p) },
-    { id: "reverse-x",        icon: Undo2,        color: "#ffd43b", onCatch: ()  => reverseX() },
+    { id: "reverse-x",        icon: Undo2,     color: "#ffd43b",
+      canActivate: () => Date.now() - lastHitTimeRef.current >= 1500,
+      onCatch: () => reverseX() },
     { id: "distortion",       icon: Activity,     color: "#74c0fc", onCatch: (p) => distortion(p) },
     { id: "size-blue",        icon: Expand,       color: "#4dabf7", onCatch: (p) => sizeBlue(p) },
     { id: "mega-barra",       icon: MoveVertical, color: "#4dabf7", onCatch: (p) => megaBarra(p) },
@@ -871,8 +1199,24 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     { id: "panic",            icon: AlertCircle,  color: "#ff6348", onCatch: (p) => panicItem(p) },
     { id: "mine",             icon: Bomb,         color: "#ff4757", onCatch: () => {},
       onBallCollide: () => triggerMine() },
+    { id: "overcharge",   icon: Zap,        color: "#f59f00", onCatch: (p) => overcharge(p) },
+    { id: "curve-shot",   icon: Crosshair,  color: "#ff9f43", onCatch: (p) => curveShotItem(p) },
+    { id: "repulsor",     icon: Magnet,     color: "#f06595", onCatch: (p) => repulsorItem(p) },
+    { id: "paddle-ghost", icon: EyeOff,     color: "#a9e34b", onCatch: (p) => paddleGhostItem(p) },
+    { id: "vortex",       icon: RotateCw,   color: "#74c0fc", onCatch: (p) => vorticeItem(p) },
+    { id: "barrier",      icon: Columns,    color: "#e599f7", onCatch: (p) => barreiraItem(p) },
+    { id: "reflexo",      icon: RefreshCcw, color: "#ff8787", onCatch: (p) => reflexoItem(p) },
+    { id: "frenagem",     icon: Anchor,     color: "#868e96", onCatch: (p) => frenagemItem(p) },
+    { id: "tempestade",   icon: Wind,       color: "#4dabf7", onCatch: (p) => tempestadeItem(p) },
+    { id: "divisor",      icon: GitBranch,  color: "#63e6be", onCatch: (p) => divisorItem(p) },
   ];
+  // Filter by user-selected items
+  const itemPool = config.selectedItemIds === null
+    ? allItemPool
+    : allItemPool.filter(it => config.selectedItemIds!.includes(it.id));
   const itemPoolRef = useRef(itemPool);
+  // Keep ref in sync every render so RAF closures always see the current filtered pool
+  itemPoolRef.current = itemPool;
 
   const prevBallCxRef = useRef<number | null>(null);
   const prevBallCyRef = useRef<number | null>(null);
@@ -929,19 +1273,22 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   }
 
   useEffect(() => {
-    setBallDirectionWithSpeed(START_BALL_SPEED);
-    if (config.mode === "solo") {
-      if (isPortrait) {
-        VyRef.current = -Math.abs(VyRef.current);
-      } else {
-        VxRef.current = Math.abs(VxRef.current);
-      }
-    }
+    // Delay initial launch — ball starts at 1/2 speed so players can position
+    cooldownRef.current = 60;
+    ballLaunchTimerRef.current = window.setTimeout(() => {
+      setBallDirectionWithSpeed(START_BALL_SPEED / 2, config.mode === "solo" ? "player2" : null);
+      spawnSlowRef.current = true;
+      cooldownRef.current = 20;
+      ballLaunchTimerRef.current = null;
+    }, 800);
+    return () => {
+      if (ballLaunchTimerRef.current !== null) { clearTimeout(ballLaunchTimerRef.current); ballLaunchTimerRef.current = null; }
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    const check = () => setIsPortrait(window.innerWidth < window.innerHeight && window.innerWidth <= 900);
+    const check = () => setIsPortrait(window.innerWidth < window.innerHeight);
     window.addEventListener("resize", check);
     window.addEventListener("orientationchange", check);
     return () => {
@@ -950,7 +1297,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     };
   }, []);
 
-  useEffect(() => { isPausedRef.current = winner !== null; }, [winner]);
+  useEffect(() => { isPausedRef.current = winner !== null || gamePaused; }, [winner, gamePaused]);
 
   useEffect(() => {
     prevBallCxRef.current = null;
@@ -965,16 +1312,41 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       cy: number, barraCenterY: number, barraHalfH: number,
       barraVyRef: { current: number }, directionSign: 1 | -1
     ) {
+      const hitter: PlayerId = directionSign === 1 ? "player1" : "player2";
+      lastHitTimeRef.current = Date.now();
+
       const impact = Math.max(-1, Math.min(1, (cy - barraCenterY) / barraHalfH));
       const fireMult = fireActiveRef.current ? 1.38 : 1.0;
-      const baseSpeed = Math.sqrt(VxRef.current ** 2 + VyRef.current ** 2) * fireMult;
+      let baseSpeed = Math.sqrt(VxRef.current ** 2 + VyRef.current ** 2) * fireMult;
+
+      // Spawn slow: restore full speed on first touch
+      if (spawnSlowRef.current) {
+        baseSpeed = startBallSpeedRef.current * fireMult;
+        spawnSlowRef.current = false;
+      }
+
+      // SOBRECARGA: double the speed on next hit
+      if (overchargeRef.current === hitter) {
+        baseSpeed = Math.min(baseSpeed * 2, startBallSpeedRef.current * 3.0);
+        overchargeRef.current = null;
+      }
+
       const progressionFactor = 1 + configRef.current.speedProgression;
-      const maxSpeed = configRef.current.initialSpeed * 2.5;
+      const maxSpeed = startBallSpeedRef.current * 2.5;
       const speed = Math.min(baseSpeed * progressionFactor, maxSpeed);
+
       const angle = impact * (Math.PI / 3);
       VxRef.current = directionSign * Math.abs(speed * Math.cos(angle));
       VyRef.current = speed * Math.sin(angle) + barraVyRef.current * 0.008;
       vyAccelRef.current = configRef.current.spinEnabled ? -barraVyRef.current * 0.5 : 0;
+
+      // TIRO CURVO: add extra curve acceleration
+      if (curveShotRef.current?.player === hitter && curveShotRef.current.count > 0) {
+        vyAccelRef.current += impact * 700;
+        curveShotRef.current.count--;
+        if (curveShotRef.current.count <= 0) curveShotRef.current = null;
+      }
+
       const totalSpeed = Math.hypot(VxRef.current, VyRef.current);
       if (totalSpeed > 0) {
         const minVx = totalSpeed * 0.28;
@@ -983,28 +1355,85 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
           VyRef.current = Math.sign(VyRef.current || 1) * Math.sqrt(Math.max(0, totalSpeed ** 2 - minVx ** 2));
         }
       }
+
+      // DIVISOR: spawn 2 decoy balls at current ball position
+      if (divisorRef.current === hitter) {
+        divisorRef.current = null;
+        const curSpeed = Math.hypot(VxRef.current, VyRef.current);
+        if (bolaRef.current) {
+          const rect = bolaRef.current.getBoundingClientRect();
+          const bx = rect.left + rect.width / 2;
+          const by = rect.top + rect.height / 2;
+          const br = rect.width / 2;
+          const baseAngle = Math.atan2(VyRef.current, VxRef.current);
+          setDecoys(prev => [
+            ...prev,
+            { id: `div-${Date.now()}-0`, x: bx, y: by, radius: br, vx: Math.cos(baseAngle + 0.45) * curSpeed, vy: Math.sin(baseAngle + 0.45) * curSpeed },
+            { id: `div-${Date.now()}-1`, x: bx, y: by, radius: br, vx: Math.cos(baseAngle - 0.45) * curSpeed, vy: Math.sin(baseAngle - 0.45) * curSpeed },
+          ]);
+        }
+      }
     }
 
     function applyFrontCollisionPortrait(
       cx: number, barraCenterX: number, barraHalfW: number,
       barraVxRef: { current: number }, goingUp: boolean
     ) {
+      const hitter: PlayerId = goingUp ? "player1" : "player2";
+      lastHitTimeRef.current = Date.now();
+
       const impact = Math.max(-1, Math.min(1, (cx - barraCenterX) / barraHalfW));
       const fireMult = fireActiveRef.current ? 1.38 : 1.0;
-      const baseSpeed = Math.sqrt(VxRef.current ** 2 + VyRef.current ** 2) * fireMult;
+      let baseSpeed = Math.sqrt(VxRef.current ** 2 + VyRef.current ** 2) * fireMult;
+
+      if (spawnSlowRef.current) {
+        baseSpeed = startBallSpeedRef.current * fireMult;
+        spawnSlowRef.current = false;
+      }
+
+      if (overchargeRef.current === hitter) {
+        baseSpeed = Math.min(baseSpeed * 2, startBallSpeedRef.current * 3.0);
+        overchargeRef.current = null;
+      }
+
       const progressionFactor = 1 + configRef.current.speedProgression;
-      const maxSpeed = configRef.current.initialSpeed * 2.5;
+      const maxSpeed = startBallSpeedRef.current * 2.5;
       const speed = Math.min(baseSpeed * progressionFactor, maxSpeed);
+
       const angle = impact * (Math.PI / 3);
       VyRef.current = (goingUp ? -1 : 1) * Math.abs(speed * Math.cos(angle));
       VxRef.current = speed * Math.sin(angle) + barraVxRef.current * 0.008;
       vyAccelRef.current = configRef.current.spinEnabled ? -barraVxRef.current * 0.5 : 0;
+
+      if (curveShotRef.current?.player === hitter && curveShotRef.current.count > 0) {
+        vyAccelRef.current += impact * 700;
+        curveShotRef.current.count--;
+        if (curveShotRef.current.count <= 0) curveShotRef.current = null;
+      }
+
       const totalSpeed = Math.hypot(VxRef.current, VyRef.current);
       if (totalSpeed > 0) {
         const minVy = totalSpeed * 0.28;
         if (Math.abs(VyRef.current) < minVy) {
           VyRef.current = (goingUp ? -1 : 1) * minVy;
           VxRef.current = Math.sign(VxRef.current || 1) * Math.sqrt(Math.max(0, totalSpeed ** 2 - minVy ** 2));
+        }
+      }
+
+      if (divisorRef.current === hitter) {
+        divisorRef.current = null;
+        const curSpeed = Math.hypot(VxRef.current, VyRef.current);
+        if (bolaRef.current) {
+          const rect = bolaRef.current.getBoundingClientRect();
+          const bx = rect.left + rect.width / 2;
+          const by = rect.top + rect.height / 2;
+          const br = rect.width / 2;
+          const baseAngle = Math.atan2(VyRef.current, VxRef.current);
+          setDecoys(prev => [
+            ...prev,
+            { id: `div-${Date.now()}-0`, x: bx, y: by, radius: br, vx: Math.cos(baseAngle + 0.45) * curSpeed, vy: Math.sin(baseAngle + 0.45) * curSpeed },
+            { id: `div-${Date.now()}-1`, x: bx, y: by, radius: br, vx: Math.cos(baseAngle - 0.45) * curSpeed, vy: Math.sin(baseAngle - 0.45) * curSpeed },
+          ]);
         }
       }
     }
@@ -1167,6 +1596,31 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         }
       }
 
+      // Barrier collision (landscape only)
+      if (barrierActiveRef.current && !isPortraitRef.current) {
+        const barrierX = window.innerWidth / 2;
+        const h = window.innerHeight;
+        const HALF_W = 4;
+        const segs: [number, number][] = [[h*0.10, h*0.27], [h*0.37, h*0.63], [h*0.73, h*0.90]];
+
+        const inBarrierZone = cx + r >= barrierX - HALF_W && cx - r <= barrierX + HALF_W;
+        const crossedBarrier = prevCx !== null && (
+          (prevCx + r < barrierX && cx + r >= barrierX) ||
+          (prevCx - r > barrierX && cx - r <= barrierX)
+        );
+
+        if (inBarrierZone || crossedBarrier) {
+          for (const [y0, y1] of segs) {
+            if (cy + r >= y0 && cy - r <= y1) {
+              VxRef.current = cx <= barrierX ? -Math.abs(VxRef.current) : Math.abs(VxRef.current);
+              cooldownRef.current = 8;
+              collisionRafRef.current = requestAnimationFrame(checkCollision);
+              return;
+            }
+          }
+        }
+      }
+
       // Solo: check brick collision
       if (gameModeRef.current === "solo" && bricksRef.current.length > 0) {
         for (const brick of bricksRef.current) {
@@ -1226,8 +1680,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       const base = configRef.current.spawnDelay;
       const delay = base + Math.random() * base * 0.5;
       itemSpawnTimeoutRef.current = window.setTimeout(() => {
-        if (winnerRef.current !== null) return;
-        if (window.innerWidth > 0 && window.innerHeight > 0) {
+        if (winnerRef.current === null && window.innerWidth > 0 && window.innerHeight > 0) {
           const entryPool = itemPoolRef.current;
           const entry = entryPool[Math.floor(Math.random() * entryPool.length)];
           const marginX = 140;
@@ -1284,6 +1737,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
               color: item.color,
               onCatch: item.onCatch,
               canUse: item.canUse,
+              canActivate: item.canActivate,
             };
             if (lastTouchRef.current === "player1") {
               setCurrent1((prevCurrent) => {
@@ -1328,14 +1782,33 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     activeItemsRef.current = activeItems;
   }, [activeItems]);
 
+  function expireReflexo(holder: PlayerId) {
+    reflexoRef.current = null;
+    const rKey = `reflexo:${holder}`;
+    if (timeoutByKeyRef.current[rKey]) { clearTimeout(timeoutByKeyRef.current[rKey]!); timeoutByKeyRef.current[rKey] = null; }
+    if (buffCleanupRef.current[rKey]) { clearTimeout(buffCleanupRef.current[rKey]!); buffCleanupRef.current[rKey] = null; }
+    setActiveBuffs(prev => prev.filter(b => b.key !== rKey));
+  }
+
   function shoot1() {
     if (!current1) return;
     if (current1.canUse && !current1.canUse("player1")) {
       notify("⚠ BOLA NO LADO ERRADO", "#ffd43b", "player1");
       return;
     }
+    if (current1.canActivate && !current1.canActivate("player1")) {
+      notify("⚠ AGUARDA", "#ffd43b", "player1");
+      return;
+    }
+    // Reflexo: player2 holds reflect — item goes back at player1 (the activator)
+    const reflected = reflexoRef.current === "player2";
+    if (reflected) {
+      expireReflexo("player2");
+      notify("↩ REFLEXO!", "#ff8787", "player2");
+      notify("↩ REFLEXO!", "#ff8787", "player1");
+    }
     if (next1) { setCurrent1(next1); setNext1(null); } else { setCurrent1(null); }
-    current1.onCatch("player1");
+    current1.onCatch(reflected ? "player2" : "player1");
   }
 
   function shoot2() {
@@ -1344,8 +1817,31 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       notify("⚠ BOLA NO LADO ERRADO", "#ffd43b", "player2");
       return;
     }
+    if (current2.canActivate && !current2.canActivate("player2")) {
+      notify("⚠ AGUARDA", "#ffd43b", "player2");
+      return;
+    }
+    // Reflexo: player1 holds reflect — item goes back at player2 (the activator)
+    const reflected = reflexoRef.current === "player1";
+    if (reflected) {
+      expireReflexo("player1");
+      notify("↩ REFLEXO!", "#ff8787", "player1");
+      notify("↩ REFLEXO!", "#ff8787", "player2");
+    }
     if (next2) { setCurrent2(next2); setNext2(null); } else { setCurrent2(null); }
-    current2.onCatch("player2");
+    current2.onCatch(reflected ? "player1" : "player2");
+  }
+
+  function discard1() {
+    if (!current1) return;
+    if (next1) { setCurrent1(next1); setNext1(null); } else { setCurrent1(null); }
+    notify("✕ DESCARTADO", "#868e96", "player1");
+  }
+
+  function discard2() {
+    if (!current2) return;
+    if (next2) { setCurrent2(next2); setNext2(null); } else { setCurrent2(null); }
+    notify("✕ DESCARTADO", "#868e96", "player2");
   }
   shoot2Ref.current = shoot2;
 
@@ -1429,6 +1925,8 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       if (itemSpawnTimeoutRef.current !== null) clearTimeout(itemSpawnTimeoutRef.current);
       if (itemPickupRafRef.current !== null) cancelAnimationFrame(itemPickupRafRef.current);
       if (distortionIntervalRef.current !== null) clearInterval(distortionIntervalRef.current);
+      if (tempestadeIntervalRef.current !== null) clearInterval(tempestadeIntervalRef.current);
+      if (ballLaunchTimerRef.current !== null) clearTimeout(ballLaunchTimerRef.current);
     };
   }, []);
 
@@ -1556,7 +2054,8 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
           ["w", "up"],
           ["s", "down"],
           [" ", "shoot"],
-          ["d", "rotate"]
+          ["d", "rotate"],
+          ["a", "discard"],
         ])}
         onVelocityChange={(v) => {
           if (isPortrait) barra1VxRef.current = v;
@@ -1564,17 +2063,21 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         }}
         onShoot={shoot1}
         onRotate={rotate1}
+        onDiscard={discard1}
         touchZone={isPortrait ? "bottom" : "left"}
         gamepadIndex={p1GamepadIndex}
         frozen={frozen.player1}
         inverted={inverted.player1}
         driftForce={drift.player1}
-        paused={winner !== null}
+        inertia={frenagemActive.player1}
+        paused={winner !== null || gamePaused}
       >
-        <Barra ref={barra1Ref}
-          height={isPortrait ? PORT_PADDLE_H : paddleHeight1}
-          width={isPortrait ? portPaddleW1 : BASE_PADDLE_WIDTH}
-          color="#56d1c4" glowColor="86,209,196" />
+        <div style={{ opacity: paddleHidden === "player1" ? 0 : 1 }}>
+          <Barra ref={barra1Ref}
+            height={isPortrait ? PORT_PADDLE_H : paddleHeight1}
+            width={isPortrait ? portPaddleW1 : BASE_PADDLE_WIDTH}
+            color="#56d1c4" glowColor="86,209,196" />
+        </div>
       </ManualMover>
 
       {config.mode !== "solo" && (
@@ -1589,7 +2092,8 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
             ["ArrowUp", "up"],
             ["ArrowDown", "down"],
             ["Enter", "shoot"],
-            ["ArrowRight", "rotate"]
+            ["ArrowRight", "rotate"],
+            ["ArrowLeft", "discard"],
           ])}
           onVelocityChange={(v) => {
             if (isPortrait) barra2VxRef.current = v;
@@ -1597,18 +2101,22 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
           }}
           onShoot={shoot2}
           onRotate={rotate2}
+          onDiscard={discard2}
           touchZone={isPortrait ? "top" : (conn ? undefined : "right")}
           gamepadIndex={conn ? undefined : p2GamepadIndex}
           frozen={frozen.player2}
           inverted={inverted.player2}
           driftForce={drift.player2}
-          paused={winner !== null}
+          inertia={frenagemActive.player2}
+          paused={winner !== null || gamePaused}
           externalInput={conn ? guestInputRef : null}
         >
-          <Barra ref={barra2Ref}
-            height={isPortrait ? PORT_PADDLE_H : paddleHeight2}
-            width={isPortrait ? portPaddleW2 : BASE_PADDLE_WIDTH}
-            color="#f5895e" glowColor="245,137,94" />
+          <div style={{ opacity: paddleHidden === "player2" ? 0 : 1 }}>
+            <Barra ref={barra2Ref}
+              height={isPortrait ? PORT_PADDLE_H : paddleHeight2}
+              width={isPortrait ? portPaddleW2 : BASE_PADDLE_WIDTH}
+              color="#f5895e" glowColor="245,137,94" />
+          </div>
         </ManualMover>
       )}
 
@@ -1622,8 +2130,10 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         teleportY={teleportY}
         vyAccelRef={vyAccelRef}
         magnetRef={magnetRef}
+        vortexRef={vortexRef}
+        repulsorRef={repulsorRef}
         maxSpeedRef={slowMaxSpeedRef}
-        paused={winner !== null}
+        paused={winner !== null || gamePaused}
         bounceLeft={config.mode === "rally"}
         bounceRight={config.mode !== "pong"}
         portraitMode={isPortrait}
@@ -1685,44 +2195,76 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         );
       })}
 
-      {/* Botão voltar ao menu */}
-      <button
-        onClick={() => { resetGame(); onBack?.(); }}
-        style={{
-          position: "fixed",
-          top: 10,
-          left: "50%",
-          transform: "translateX(-50%)",
-          background: "rgba(196,170,255,0.1)",
-          border: "1px solid rgba(196,170,255,0.35)",
-          color: "rgba(196,170,255,0.75)",
-          fontFamily: "'Courier New', Courier, monospace",
-          fontSize: "clamp(0.65rem, 1.2vw, 0.85rem)",
-          fontWeight: "bold",
-          letterSpacing: "0.25em",
-          padding: "clamp(5px, 1vh, 10px) clamp(14px, 2vw, 28px)",
-          minHeight: 36,
-          minWidth: 80,
-          borderRadius: 4,
-          cursor: "pointer",
-          zIndex: 50,
-          whiteSpace: "nowrap",
-        }}
-      >
-        MENU
-      </button>
+      {/* Botão de pausa */}
+      {!winner && (
+        <button
+          onClick={() => setGamePaused(p => !p)}
+          style={{
+            position: "fixed",
+            top: 8,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: gamePaused ? "rgba(196,170,255,0.18)" : "rgba(196,170,255,0.07)",
+            border: `1.5px solid ${gamePaused ? "rgba(196,170,255,0.7)" : "rgba(196,170,255,0.4)"}`,
+            color: gamePaused ? "rgba(196,170,255,1)" : "rgba(196,170,255,0.7)",
+            fontFamily: "'Courier New', Courier, monospace",
+            fontSize: "clamp(0.72rem, 1.3vw, 0.9rem)",
+            fontWeight: "bold",
+            letterSpacing: "0.22em",
+            padding: "7px 22px",
+            borderRadius: 5,
+            cursor: "pointer",
+            zIndex: 50,
+            whiteSpace: "nowrap",
+            boxShadow: gamePaused ? "0 0 18px rgba(196,170,255,0.25)" : "none",
+          }}
+        >
+          {gamePaused ? "▶  CONTINUAR" : "II  PAUSA"}
+        </button>
+      )}
+
+      {/* Overlay de pausa */}
+      {gamePaused && !winner && (
+        <div style={{
+          position: "fixed", inset: 0,
+          background: "rgba(14,11,24,0.82)",
+          display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center", gap: 28,
+          zIndex: 90,
+        }}>
+          <div style={{
+            fontFamily: "'Courier New', Courier, monospace",
+            fontSize: "clamp(1.4rem, 5vw, 2.4rem)",
+            fontWeight: "bold",
+            color: "rgba(196,170,255,0.9)",
+            letterSpacing: "0.2em",
+          }}>PAUSA</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
+            <button
+              onClick={() => setGamePaused(false)}
+              style={winBtnStyle}
+            >RETOMAR</button>
+            <button
+              onClick={() => { resetGame(); onBack?.(); }}
+              style={{ ...winBtnStyle, background: "rgba(196,170,255,0.08)", borderColor: "rgba(196,170,255,0.5)", color: "rgba(196,170,255,0.85)" }}
+            >MENU</button>
+          </div>
+        </div>
+      )}
 
       {/* Botões mobile — landscape only, modes with items */}
       {isTouchDevice && !isPortrait && (config.mode === "pong" || config.mode === "rally" || config.mode === "solo") && (
         <>
-          <div style={{ position: "fixed", bottom: 20, left: 16, display: "flex", gap: 10, zIndex: 50 }}>
+          <div style={{ position: "fixed", bottom: 20, left: 16, display: "flex", gap: 8, zIndex: 50 }}>
+            <MobileBtn label="✕" color="#868e96" onPress={discard1} />
             <MobileBtn label="TROCAR" color="#56d1c4" onPress={rotate1} />
             <MobileBtn label="USAR" color="#56d1c4" onPress={shoot1} />
           </div>
           {!conn && config.mode !== "solo" && (
-            <div style={{ position: "fixed", bottom: 20, right: 16, display: "flex", gap: 10, zIndex: 50 }}>
+            <div style={{ position: "fixed", bottom: 20, right: 16, display: "flex", gap: 8, zIndex: 50 }}>
               <MobileBtn label="USAR" color="#f5895e" onPress={shoot2} />
               <MobileBtn label="TROCAR" color="#f5895e" onPress={rotate2} />
+              <MobileBtn label="✕" color="#868e96" onPress={discard2} />
             </div>
           )}
         </>
@@ -1735,7 +2277,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
           startY={s.startY}
           direction={s.direction}
           enemyRef={s.shooter === "player1" ? barra2Ref : barra1Ref}
-          paused={winner !== null}
+          paused={winner !== null || gamePaused}
           onHit={() => {
             setShots(prev => prev.filter(x => x.id !== s.id));
             applyFreeze(opposite(s.shooter));
@@ -1767,6 +2309,27 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
           <Bola radius={ballRadius} ghost={ballGhost} />
         </div>
       ))}
+
+      {/* Barreira Segmentada */}
+      {barrierActive && !isPortrait && (
+        <>
+          {([[10, 27], [37, 63], [73, 90]] as [number, number][]).map(([top, bottom], i) => (
+            <div key={i} style={{
+              position: "fixed",
+              left: "50%",
+              top: `${top}%`,
+              transform: "translateX(-50%)",
+              width: 8,
+              height: `${bottom - top}%`,
+              background: "rgba(229,153,247,0.65)",
+              boxShadow: "0 0 14px rgba(229,153,247,0.55)",
+              borderRadius: 4,
+              pointerEvents: "none",
+              zIndex: 20,
+            }} />
+          ))}
+        </>
+      )}
 
       {/* Solo bricks */}
       {config.mode === "solo" && bricks.map(brick => (

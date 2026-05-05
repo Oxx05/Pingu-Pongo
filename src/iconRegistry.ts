@@ -2,14 +2,16 @@ import {
   Shuffle, Gauge, TimerReset, Expand, Rabbit, Turtle, Shield, Trophy,
   Snowflake, Zap, Flame, Maximize2, Minimize2, MoveVertical, Scissors,
   Undo2, EyeOff, ArrowUpDown, Ghost, AlertCircle, Activity, ArrowLeftRight,
-  Bomb, Magnet, TrendingUp, type LucideIcon,
+  Bomb, Magnet, TrendingUp, Copy, Wind, RotateCw, RefreshCcw, Anchor,
+  GitBranch, Crosshair, Columns, type LucideIcon,
 } from "lucide-react";
 
 const REGISTRY: Record<string, LucideIcon> = {
   Shuffle, Gauge, TimerReset, Expand, Rabbit, Turtle, Shield, Trophy,
   Snowflake, Zap, Flame, Maximize2, Minimize2, MoveVertical, Scissors,
   Undo2, EyeOff, ArrowUpDown, Ghost, AlertCircle, Activity, ArrowLeftRight,
-  Bomb, Magnet, TrendingUp,
+  Bomb, Magnet, TrendingUp, Copy, Wind, RotateCw, RefreshCcw, Anchor,
+  GitBranch, Crosshair, Columns,
 };
 
 export function iconToId(icon: LucideIcon): string {

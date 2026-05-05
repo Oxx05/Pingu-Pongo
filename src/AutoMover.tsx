@@ -11,6 +11,8 @@ type AutoMoverProps = {
   teleportY?: number | null;
   vyAccelRef?: { current: number };
   magnetRef?: { current: "player1" | "player2" | null };
+  vortexRef?: { current: "player1" | "player2" | null };
+  repulsorRef?: { current: "player1" | "player2" | null };
   maxSpeedRef?: { current: number };
   paused?: boolean;
   /** Landscape: left wall bounces instead of triggering onGoal("player2") */
@@ -31,7 +33,7 @@ type AutoMoverProps = {
 export default function AutoMover({
   vxRef, vyRef,
   initialX = 40, initialY = 40,
-  onGoal, teleportY, vyAccelRef, magnetRef, maxSpeedRef,
+  onGoal, teleportY, vyAccelRef, magnetRef, vortexRef, repulsorRef, maxSpeedRef,
   paused = false,
   bounceLeft = false, bounceRight = false,
   portraitMode = false,
@@ -133,6 +135,27 @@ export default function AutoMover({
           const factor = Math.pow(0.4, dt);
           vyRef.current *= factor;
           if (vyAccelRef) vyAccelRef.current *= factor;
+        }
+      }
+
+      // Vortex: constant pull toward screen center (X in landscape, Y in portrait)
+      if (vortexRef?.current) {
+        if (portraitModeRef.current) {
+          const centerY = window.innerHeight / 2 - sizeRef.current.h / 2;
+          vyRef.current += Math.sign(centerY - posRef.current.y) * 180 * dt;
+        } else {
+          const centerX = window.innerWidth / 2 - sizeRef.current.w / 2;
+          vxRef.current += Math.sign(centerX - posRef.current.x) * 180 * dt;
+        }
+      }
+
+      // Repulsor: push ball toward opponent's side (away from activating player)
+      if (repulsorRef?.current) {
+        const activator = repulsorRef.current;
+        if (portraitModeRef.current) {
+          vyRef.current += (activator === "player1" ? -150 : 150) * dt;
+        } else {
+          vxRef.current += (activator === "player1" ? 150 : -150) * dt;
         }
       }
 

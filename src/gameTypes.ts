@@ -5,8 +5,10 @@ export type GameConfig = {
   spawnDelay: number;   // ms between spawns (pong + rally only)
   spinEnabled: boolean;
   mode: GameMode;
-  initialSpeed: number;    // px/s — starting ball speed
-  speedProgression: number; // speed multiplier added per paddle hit (0 = none)
+  initialSpeed: number;    // px/s — starting ball speed (scaled by screen size at runtime)
+  speedProgression: number; // speed multiplier per paddle hit (0 = none)
+  selectedItemIds: string[] | null; // null = all items enabled
+  soloLayout: number;  // brick layout index (0-3)
 };
 
 export const DEFAULT_CONFIG: GameConfig = {
@@ -16,4 +18,6 @@ export const DEFAULT_CONFIG: GameConfig = {
   mode: "pong",
   initialSpeed: 500,
   speedProgression: 0,
+  selectedItemIds: null,
+  soloLayout: 0,
 };

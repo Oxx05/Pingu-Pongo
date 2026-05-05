@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Shuffle, Gauge, TimerReset, Expand, Rabbit, Turtle, Shield, Trophy, Snowflake, Zap, Flame, Maximize2, Minimize2, MoveVertical, Scissors, Undo2, EyeOff, ArrowUpDown, Ghost, AlertCircle, Activity, ArrowLeftRight, Bomb, Magnet, TrendingUp, type LucideIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Shuffle, Gauge, TimerReset, Expand, Rabbit, Turtle, Shield, Trophy, Snowflake, Zap, Flame, Maximize2, Minimize2, MoveVertical, Scissors, Undo2, ArrowUpDown, Ghost, AlertCircle, Activity, ArrowLeftRight, Bomb, Magnet, TrendingUp, Copy, EyeOff, Wind, RotateCw, RefreshCcw, Anchor, GitBranch, Crosshair, Columns, type LucideIcon } from "lucide-react";
 import type { GameConfig, GameMode } from "./gameTypes.ts";
 import { DEFAULT_CONFIG } from "./gameTypes.ts";
 
@@ -12,50 +12,94 @@ type MenuProps = {
 };
 
 type ItemInfo = {
+  id: string;
   icon: LucideIcon;
   color: string;
   name: string;
   desc: string;
 };
 
+// All available items — IDs must match Game.tsx itemPool
 const ITEMS: ItemInfo[] = [
   // Neutral
-  { icon: Shuffle,    color: "#ffd43b", name: "Direção Aleatória",  desc: "A bola muda de direção" },
-  { icon: Gauge,      color: "#74c0fc", name: "Velocidade Aleatória",desc: "A velocidade da bola muda" },
-  { icon: TimerReset, color: "#91a7ff", name: "Câmara Lenta",       desc: "A bola abranda por 4s" },
-  { icon: Undo2,      color: "#ffd43b", name: "Recuo",              desc: "Inverte a direção horizontal da bola" },
-  // Positivos (azul/verde — ajudam o teu lado)
-  { icon: Expand,     color: "#4dabf7", name: "Barra Maior",        desc: "A tua barra fica maior por 9s" },
-  { icon: MoveVertical,color: "#4dabf7",name: "Mega Barra",         desc: "A tua barra fica enorme por 4s" },
-  { icon: Rabbit,     color: "#51cf66", name: "Lebre",              desc: "A tua velocidade aumenta por 7s" },
-  { icon: Shield,     color: "#63e6be", name: "Escudo",             desc: "Bloqueia uma vez a bola por 8s" },
-  { icon: Trophy,     color: "#fab005", name: "Golo Duplo",         desc: "Próximo golo vale 2 pontos por 10s" },
-  { icon: Maximize2,  color: "#4dabf7", name: "Bola Gigante",       desc: "A bola fica enorme por 6s" },
-  { icon: Minimize2,  color: "#51cf66", name: "Mini Bola",          desc: "A bola fica minúscula por 5s" },
-  { icon: Zap,        color: "#c0eb75", name: "Teletransporte",     desc: "A bola salta para posição aleatória" },
-  { icon: Flame,      color: "#ff9f43", name: "Turbine",            desc: "A bola acelera para velocidade máxima" },
-  { icon: EyeOff,        color: "#c0eb75", name: "Bola Fantasma",   desc: "A bola fica quase invisível por 5s" },
-  { icon: Ghost,         color: "#ffd43b", name: "Eco",             desc: "Spawna 3 bolas falsas e esconde a real por 4.5s" },
-  { icon: Magnet,        color: "#51cf66", name: "Íman",            desc: "Puxa a bola para trajectória horizontal por 5s" },
-  { icon: TrendingUp,    color: "#ff7b54", name: "Bola de Fogo",    desc: "Cada pancada acelera a bola por 6s" },
-  { icon: ArrowLeftRight,color: "#74c0fc", name: "Trocar Itens",    desc: "Troca os itens dos dois jogadores" },
-  // Neutro extra
-  { icon: Activity,      color: "#74c0fc", name: "Distorção",       desc: "Alterna velocidade alta/baixa a cada 0.48s por 6s" },
-  // Negativos (vermelho — afetam o inimigo)
-  { icon: Expand,        color: "#ff6b6b", name: "Inimigo Menor",   desc: "A barra do inimigo encolhe por 9s" },
-  { icon: Turtle,        color: "#ff6b6b", name: "Tartaruga",       desc: "O inimigo abranda por 8s" },
-  { icon: Snowflake,     color: "#ff4757", name: "Gelo",            desc: "Inimigo fica imóvel por 2.8s" },
-  { icon: ArrowUpDown,   color: "#ff6348", name: "Inversão",        desc: "Controlos do inimigo invertem por 5s" },
-  { icon: Scissors,      color: "#ff6b6b", name: "Ladrão",          desc: "Destrói os itens do inimigo" },
-  { icon: AlertCircle,   color: "#ff6348", name: "Pânico",          desc: "Inimigo deriva para baixo constantemente por 5s" },
-  // Campo
-  { icon: Bomb,          color: "#ff4757", name: "Mina",            desc: "Spawna no campo — bola activa e dispara a alta velocidade" },
+  { id: "random-direction", icon: Shuffle,      color: "#ffd43b", name: "Direção Aleatória",  desc: "A bola muda de direção" },
+  { id: "timer-change",     icon: TimerReset,   color: "#91a7ff", name: "Câmara Lenta",        desc: "A bola abranda por 4s" },
+  { id: "reverse-x",        icon: Undo2,        color: "#ffd43b", name: "Recuo",               desc: "Inverte a direção horizontal da bola" },
+  { id: "distortion",       icon: Activity,     color: "#74c0fc", name: "Distorção",           desc: "Alterna velocidade alta/baixa a cada 0.48s por 6s" },
+  // Positive
+  { id: "size-blue",        icon: Expand,       color: "#4dabf7", name: "Barra Maior",         desc: "A tua barra fica maior por 9s" },
+  { id: "mega-barra",       icon: MoveVertical, color: "#4dabf7", name: "Mega Barra",          desc: "A tua barra fica enorme por 4s" },
+  { id: "speed-blue",       icon: Rabbit,       color: "#51cf66", name: "Lebre",               desc: "A tua velocidade aumenta por 7s" },
+  { id: "shield",           icon: Shield,       color: "#63e6be", name: "Escudo",              desc: "Bloqueia uma vez a bola por 8s" },
+  { id: "goal-multiplier",  icon: Trophy,       color: "#fab005", name: "Golo Duplo",          desc: "Próximo golo vale 2 pontos por 10s" },
+  { id: "big-ball",         icon: Maximize2,    color: "#4dabf7", name: "Bola Gigante",        desc: "A bola fica enorme por 6s" },
+  { id: "mini-ball",        icon: Minimize2,    color: "#51cf66", name: "Mini Bola",           desc: "A bola fica minúscula por 5s" },
+  { id: "teleport",         icon: Zap,          color: "#c0eb75", name: "Teletransporte",      desc: "A bola salta para posição aleatória" },
+  { id: "turbine",          icon: Flame,        color: "#ff9f43", name: "Turbine",             desc: "A bola acelera para velocidade máxima" },
+  { id: "ghost-ball",       icon: Ghost,        color: "#c0eb75", name: "Bola Fantasma",       desc: "A bola fica quase invisível por 5s" },
+  { id: "echo",             icon: Copy,         color: "#ffd43b", name: "Eco",                 desc: "Spawna 3 bolas falsas e esconde a real por 4.5s" },
+  { id: "magnet",           icon: Magnet,       color: "#51cf66", name: "Íman",                desc: "Puxa a bola para trajectória horizontal por 5s" },
+  { id: "fire-ball",        icon: TrendingUp,   color: "#ff7b54", name: "Bola de Fogo",        desc: "Cada pancada acelera a bola por 6s" },
+  { id: "swap-items",       icon: ArrowLeftRight,color: "#74c0fc",name: "Trocar Itens",        desc: "Troca os itens dos dois jogadores" },
+  // Negative
+  { id: "size-red",         icon: Expand,       color: "#ff6b6b", name: "Inimigo Menor",       desc: "A barra do inimigo encolhe por 9s" },
+  { id: "speed-red",        icon: Turtle,       color: "#ff6b6b", name: "Tartaruga",           desc: "O inimigo abranda por 8s" },
+  { id: "freeze",           icon: Snowflake,    color: "#ff4757", name: "Gelo",                desc: "Inimigo fica imóvel por 2.8s" },
+  { id: "invert",           icon: ArrowUpDown,  color: "#ff6348", name: "Inversão",            desc: "Controlos do inimigo invertem por 5s" },
+  { id: "rob-item",         icon: Scissors,     color: "#ff6b6b", name: "Ladrão",              desc: "Destrói os itens do inimigo" },
+  { id: "panic",            icon: AlertCircle,  color: "#ff6348", name: "Pânico",              desc: "Inimigo deriva para baixo constantemente por 5s" },
+  // Field trap
+  { id: "mine",             icon: Bomb,         color: "#ff4757", name: "Mina",                desc: "Spawna no campo — bola activa e dispara a alta velocidade" },
+  // New items
+  { id: "overcharge",   icon: Zap,        color: "#f59f00", name: "Sobrecarga",          desc: "Próxima pancada envia a bola ao dobro da velocidade" },
+  { id: "curve-shot",   icon: Crosshair,  color: "#ff9f43", name: "Tiro Curvo",          desc: "3 pancadas com spin extra — a bola curva mais" },
+  { id: "repulsor",     icon: Magnet,     color: "#f06595", name: "Repulsor",             desc: "Empurra a bola para o lado do inimigo por 6s" },
+  { id: "paddle-ghost", icon: EyeOff,     color: "#a9e34b", name: "Fantasma de Barra",   desc: "A barra do inimigo fica invisível por 5s (colisão mantém-se)" },
+  { id: "vortex",       icon: RotateCw,   color: "#74c0fc", name: "Vórtice",             desc: "A bola é atraída para o centro do ecrã por 7s" },
+  { id: "barrier",      icon: Columns,    color: "#e599f7", name: "Barreira Segmentada", desc: "3 segmentos ao centro — a bola ressalta neles por 8s" },
+  { id: "reflexo",      icon: RefreshCcw, color: "#ff8787", name: "Reflexo",             desc: "Próximo item do inimigo vira-se contra ele (uso único)" },
+  { id: "frenagem",     icon: Anchor,     color: "#868e96", name: "Frenagem",            desc: "A barra do inimigo fica com inércia — difícil de parar por 7s" },
+  { id: "tempestade",   icon: Wind,       color: "#4dabf7", name: "Tempestade",          desc: "Deflecte a direção da bola ±7° a cada 100ms por 5s" },
+  { id: "divisor",      icon: GitBranch,  color: "#63e6be", name: "Divisor",             desc: "Próxima pancada spawna 2 bolas falsas em ângulos próximos" },
 ];
+
+const ALL_ITEM_IDS = ITEMS.map(i => i.id);
 
 const isTouchDevice = typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
 
+const STORAGE_KEY = "pingu-pongo-config";
+
+function loadSavedConfig(): GameConfig {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+  } catch {}
+  return DEFAULT_CONFIG;
+}
+
 export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
-  const [config, setConfig] = useState<GameConfig>(defaultConfig ?? DEFAULT_CONFIG);
+  const [config, setConfig] = useState<GameConfig>(defaultConfig ?? loadSavedConfig());
+
+  // Persist config to localStorage on every change
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(config)); } catch {}
+  }, [config]);
+
+  const enabledIds: Set<string> = config.selectedItemIds === null
+    ? new Set(ALL_ITEM_IDS)
+    : new Set(config.selectedItemIds);
+
+  const toggleItem = (id: string) => {
+    const next = new Set(enabledIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    // null means all — keep null if everything selected
+    const arr = ALL_ITEM_IDS.filter(i => next.has(i));
+    setConfig(c => ({ ...c, selectedItemIds: arr.length === ALL_ITEM_IDS.length ? null : arr }));
+  };
 
   return (
     <div style={styles.overlay}>
@@ -101,6 +145,18 @@ export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
                 </OptionBtn>
               ))}
             </ConfigRow>
+            {config.mode === "solo" && (
+              <>
+                <div style={styles.configDivider} />
+                <ConfigRow label="MAPA">
+                  {([{ label: "CLÁSSICO", v: 0 }, { label: "DIAMANTE", v: 1 }, { label: "FORTALEZA", v: 2 }, { label: "PIRÂMIDE", v: 3 }]).map(opt => (
+                    <OptionBtn key={opt.v} active={(config.soloLayout ?? 0) === opt.v} onClick={() => setConfig(c => ({ ...c, soloLayout: opt.v }))}>
+                      {opt.label}
+                    </OptionBtn>
+                  ))}
+                </ConfigRow>
+              </>
+            )}
             {config.mode === "pong" && (
               <>
                 <div style={styles.configDivider} />
@@ -135,7 +191,7 @@ export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
             </ConfigRow>
             <div style={styles.configDivider} />
             <ConfigRow label="PROGRESSÃO">
-              {([{ label: "SEM", v: 0 }, { label: "LENTA", v: 0.04 }, { label: "RÁPIDA", v: 0.10 }]).map(opt => (
+              {([{ label: "SEM", v: 0 }, { label: "LENTA", v: 0.06 }, { label: "MÉDIA", v: 0.12 }, { label: "RÁPIDA", v: 0.22 }]).map(opt => (
                 <OptionBtn key={opt.v} active={config.speedProgression === opt.v} onClick={() => setConfig(c => ({ ...c, speedProgression: opt.v }))}>
                   {opt.label}
                 </OptionBtn>
@@ -146,6 +202,73 @@ export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
               <OptionBtn active={config.spinEnabled} onClick={() => setConfig(c => ({ ...c, spinEnabled: true }))}>ON</OptionBtn>
               <OptionBtn active={!config.spinEnabled} onClick={() => setConfig(c => ({ ...c, spinEnabled: false }))}>OFF</OptionBtn>
             </ConfigRow>
+          </div>
+        </div>
+
+        {/* Seleção de poderes */}
+        <div style={styles.section}>
+          <div style={styles.sectionTitle}>PODERES</div>
+          <div style={{ ...styles.configCard, maxWidth: 640 }}>
+            {/* Cabeçalho com botões de seleção rápida */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 20px", gap: 8, flexWrap: "wrap" as const }}>
+              <span style={{ fontFamily: "'Courier New', Courier, monospace", fontSize: "clamp(0.72rem, 1vw, 0.84rem)", color: "rgba(255,255,255,0.5)", letterSpacing: "0.08em" }}>
+                {enabledIds.size}/{ALL_ITEM_IDS.length} activos
+              </span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  className="menu-opt-btn"
+                  style={bulkBtnStyle}
+                  onClick={() => setConfig(c => ({ ...c, selectedItemIds: null }))}
+                >
+                  + TODOS
+                </button>
+                <button
+                  className="menu-opt-btn"
+                  style={bulkBtnStyle}
+                  onClick={() => setConfig(c => ({ ...c, selectedItemIds: [] }))}
+                >
+                  − TODOS
+                </button>
+              </div>
+            </div>
+            <div style={styles.configDivider} />
+            {/* Grid de itens */}
+            <div style={styles.itemToggleGrid}>
+              {ITEMS.map(item => {
+                const Icon = item.icon;
+                const active = enabledIds.has(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    className="menu-opt-btn"
+                    title={item.name + " — " + item.desc}
+                    onClick={() => toggleItem(item.id)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 7,
+                      padding: "7px 10px",
+                      borderRadius: 6,
+                      border: `1px solid ${active ? item.color + "88" : "rgba(255,255,255,0.1)"}`,
+                      background: active ? item.color + "18" : "transparent",
+                      cursor: "pointer",
+                      opacity: active ? 1 : 0.38,
+                      fontFamily: "'Courier New', Courier, monospace",
+                      fontSize: "clamp(0.7rem, 1vw, 0.82rem)",
+                      color: active ? item.color : "rgba(255,255,255,0.45)",
+                      fontWeight: active ? "bold" : "normal",
+                      letterSpacing: "0.04em",
+                      whiteSpace: "nowrap" as const,
+                      textAlign: "left" as const,
+                      transition: "opacity 0.12s, border-color 0.12s, background 0.12s",
+                    }}
+                  >
+                    <Icon size={14} color={active ? item.color : "rgba(255,255,255,0.3)"} />
+                    {item.name}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -162,8 +285,8 @@ export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
                   color="#56d1c4"
                   rows={[
                     { key: "↕↔ Deslizar", action: "Mover barra" },
-                    { key: "[ USAR ]", action: "Usar item" },
-                    { key: "[ TROCAR ]", action: "Trocar item" },
+                    { key: "[ USAR ]", action: "Usar poder" },
+                    { key: "[ TROCAR ]", action: "Trocar poder" },
                   ]}
                 />
                 <ControlCard
@@ -171,8 +294,8 @@ export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
                   color="#f5895e"
                   rows={[
                     { key: "↕↔ Deslizar", action: "Mover barra" },
-                    { key: "[ USAR ]", action: "Usar item" },
-                    { key: "[ TROCAR ]", action: "Trocar item" },
+                    { key: "[ USAR ]", action: "Usar poder" },
+                    { key: "[ TROCAR ]", action: "Trocar poder" },
                   ]}
                 />
               </div>
@@ -185,8 +308,8 @@ export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
                 color="#56d1c4"
                 rows={[
                   { key: "W / S", action: "Mover barra" },
-                  { key: "Espaço", action: "Usar item" },
-                  { key: "D", action: "Trocar item" },
+                  { key: "Espaço", action: "Usar poder" },
+                  { key: "D", action: "Trocar poder" },
                 ]}
               />
               <ControlCard
@@ -194,15 +317,15 @@ export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
                 color="#f5895e"
                 rows={[
                   { key: "↑ / ↓", action: "Mover barra" },
-                  { key: "Enter", action: "Usar item" },
-                  { key: "→", action: "Trocar item" },
+                  { key: "Enter", action: "Usar poder" },
+                  { key: "→", action: "Trocar poder" },
                 ]}
               />
             </div>
           )}
         </div>
 
-        {/* Itens */}
+        {/* Itens (info) */}
         <div style={styles.section}>
           <div style={styles.sectionTitle}>ITENS</div>
           <div style={styles.itemsNote}>
@@ -212,7 +335,7 @@ export default function Menu({ onPlay, onOnline, defaultConfig }: MenuProps) {
             {ITEMS.map((item) => {
               const Icon = item.icon;
               return (
-                <div key={item.name + item.color} style={styles.itemRow}>
+                <div key={item.id} style={styles.itemRow}>
                   <div style={{ ...styles.iconBox, background: item.color + "22", border: `1px solid ${item.color}55` }}>
                     <Icon size={20} color={item.color} />
                   </div>
@@ -279,6 +402,22 @@ function ControlCard({ title, color, rows }: { title: string; color: string; row
     </div>
   );
 }
+
+// Unused icon just to keep import (remove if linter warns)
+void Gauge;
+
+const bulkBtnStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "1px solid rgba(255,255,255,0.18)",
+  color: "rgba(255,255,255,0.6)",
+  fontFamily: "'Courier New', Courier, monospace",
+  fontSize: "clamp(0.72rem, 1vw, 0.82rem)",
+  fontWeight: "bold",
+  letterSpacing: "0.1em",
+  padding: "5px 12px",
+  borderRadius: 4,
+  cursor: "pointer",
+};
 
 const styles: Record<string, React.CSSProperties> = {
   overlay: {
@@ -435,26 +574,28 @@ const styles: Record<string, React.CSSProperties> = {
   },
   configRow: {
     display: "flex",
-    flexDirection: "row" as const,
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 16,
+    flexDirection: "column" as const,
+    alignItems: "flex-start",
+    gap: 6,
     padding: "14px 20px",
-    flexWrap: "wrap" as const,
   },
   configLabel: {
     fontFamily: "'Courier New', Courier, monospace",
     fontSize: "clamp(0.78rem, 1.1vw, 0.9rem)",
     color: "rgba(255,255,255,0.68)",
     letterSpacing: "0.1em",
-    flexShrink: 0,
     whiteSpace: "nowrap" as const,
   },
   configBtns: {
     display: "flex",
     gap: 6,
     flexWrap: "wrap" as const,
-    justifyContent: "flex-end",
+  },
+  itemToggleGrid: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: 6,
+    padding: "12px 16px",
   },
   itemsNote: {
     fontSize: "clamp(0.88rem, 1.3vw, 1rem)",
