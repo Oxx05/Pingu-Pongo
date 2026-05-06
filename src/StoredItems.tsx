@@ -16,25 +16,34 @@ type PlayerStoredItems = {
 type StoredItemsProps = {
   left?: PlayerStoredItems;
   right?: PlayerStoredItems;
+  isPortrait?: boolean;
 };
 
 function PlayerCorner({
   side,
   current,
   next,
+  isPortrait,
 }: {
   side: "left" | "right";
   current?: SlotItem;
   next?: SlotItem;
+  isPortrait?: boolean;
 }) {
   const isLeft = side === "left";
+
+  // Portrait: player1 (left/bottom) → bottom-left, player2 (right/top) → top-right
+  const verticalEdge = isPortrait
+    ? (isLeft ? { bottom: 16 } : { top: 16 })
+    : { top: 16 };
+  const horizontalEdge = isLeft ? { left: 16 } : { right: 16 };
 
   return (
     <div
       style={{
         position: "fixed",
-        top: 16,
-        [isLeft ? "left" : "right"]: 16,
+        ...verticalEdge,
+        ...horizontalEdge,
         width: 72,
         height: 72,
         pointerEvents: "none",
@@ -60,11 +69,11 @@ function PlayerCorner({
   );
 }
 
-export default function StoredItems({ left, right }: StoredItemsProps) {
+export default function StoredItems({ left, right, isPortrait }: StoredItemsProps) {
   return (
     <>
-      <PlayerCorner side="left" current={left?.current} next={left?.next} />
-      <PlayerCorner side="right" current={right?.current} next={right?.next} />
+      <PlayerCorner side="left" current={left?.current} next={left?.next} isPortrait={isPortrait} />
+      <PlayerCorner side="right" current={right?.current} next={right?.next} isPortrait={isPortrait} />
     </>
   );
 }

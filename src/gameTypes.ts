@@ -17,7 +17,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   spinEnabled: true,
   mode: "pong",
   initialSpeed: 500,
-  speedProgression: 0,
+  speedProgression: 0.06,
   selectedItemIds: null,
   soloLayout: 0,
 };

@@ -27,6 +27,8 @@ type AutoMoverProps = {
   bounceBottom?: boolean;
   /** Called whenever the ball bounces off any wall (not on goals) */
   onWallBounce?: () => void;
+  /** Curve-shot: sustained lateral force (px/s²) applied each frame; null = inactive */
+  curveForceSideRef?: { current: number | null };
   children: React.ReactNode;
 };
 
@@ -39,6 +41,7 @@ export default function AutoMover({
   portraitMode = false,
   bounceTop = false, bounceBottom = false,
   onWallBounce,
+  curveForceSideRef,
   children,
 }: AutoMoverProps) {
   const posRef = useRef({ x: initialX, y: initialY });
@@ -97,13 +100,13 @@ export default function AutoMover({
         if (r.width > 0) sizeRef.current = { w: r.width, h: r.height };
       }
 
-      // Spin (VY acceleration from paddle)
+      // Spin (VY acceleration from paddle) — pure direction change, no speed gain
       if (vyAccelRef) {
         const speedBefore = Math.hypot(vxRef.current, vyRef.current);
         vyRef.current += vyAccelRef.current * dt;
         vyAccelRef.current *= Math.exp(-1.2 * dt);
         const speedAfter = Math.hypot(vxRef.current, vyRef.current);
-        if (speedAfter > 0 && speedBefore > 0 && speedAfter < speedBefore) {
+        if (speedAfter > 0 && speedBefore > 0) {
           const rescale = speedBefore / speedAfter;
           vxRef.current *= rescale;
           vyRef.current *= rescale;
@@ -128,24 +131,51 @@ export default function AutoMover({
       // Magnet
       if (magnetRef?.current) {
         const activator = magnetRef.current;
-        const headingAtPlayer =
-          (activator === "player1" && vxRef.current < 0) ||
-          (activator === "player2" && vxRef.current > 0);
+        let headingAtPlayer: boolean;
+        if (portraitModeRef.current) {
+          // portrait: player1 at bottom (Vy > 0 = heading toward P1), player2 at top (Vy < 0)
+          headingAtPlayer =
+            (activator === "player1" && vyRef.current > 0) ||
+            (activator === "player2" && vyRef.current < 0);
+        } else {
+          headingAtPlayer =
+            (activator === "player1" && vxRef.current < 0) ||
+            (activator === "player2" && vxRef.current > 0);
+        }
         if (headingAtPlayer) {
+          const speedBefore = Math.hypot(vxRef.current, vyRef.current);
           const factor = Math.pow(0.4, dt);
-          vyRef.current *= factor;
+          if (portraitModeRef.current) {
+            vxRef.current *= factor;  // dampen lateral component in portrait
+          } else {
+            vyRef.current *= factor;
+          }
           if (vyAccelRef) vyAccelRef.current *= factor;
+          // Preserve total speed — magnet steers direction only, doesn't slow the ball
+          const speedAfter = Math.hypot(vxRef.current, vyRef.current);
+          if (speedAfter > 0 && speedBefore > 0) {
+            const rescale = speedBefore / speedAfter;
+            vxRef.current *= rescale;
+            vyRef.current *= rescale;
+          }
         }
       }
 
-      // Vortex: constant pull toward screen center (X in landscape, Y in portrait)
+      // Vortex: steer ball toward screen center — preserves total speed (direction change only)
       if (vortexRef?.current) {
+        const vortexSpeedBefore = Math.hypot(vxRef.current, vyRef.current);
         if (portraitModeRef.current) {
           const centerY = window.innerHeight / 2 - sizeRef.current.h / 2;
           vyRef.current += Math.sign(centerY - posRef.current.y) * 180 * dt;
         } else {
           const centerX = window.innerWidth / 2 - sizeRef.current.w / 2;
           vxRef.current += Math.sign(centerX - posRef.current.x) * 180 * dt;
+        }
+        const vortexSpeedAfter = Math.hypot(vxRef.current, vyRef.current);
+        if (vortexSpeedAfter > 0 && vortexSpeedBefore > 0) {
+          const rescale = vortexSpeedBefore / vortexSpeedAfter;
+          vxRef.current *= rescale;
+          vyRef.current *= rescale;
         }
       }
 
@@ -156,6 +186,39 @@ export default function AutoMover({
           vyRef.current += (activator === "player1" ? -150 : 150) * dt;
         } else {
           vxRef.current += (activator === "player1" ? 150 : -150) * dt;
+        }
+      }
+
+      // Curve-shot: sustained lateral force (no decay) — ball arcs across the field
+      if (curveForceSideRef?.current != null) {
+        const force = curveForceSideRef.current;
+        const speedBefore = Math.hypot(vxRef.current, vyRef.current);
+        if (portraitModeRef.current) {
+          vxRef.current += force * dt;        // lateral = X in portrait
+        } else {
+          vyRef.current += force * dt;        // lateral = Y in landscape
+        }
+        // preserve total speed — curve is a direction change only, no energy added
+        const speedAfter = Math.hypot(vxRef.current, vyRef.current);
+        if (speedAfter > 0 && speedBefore > 0) {
+          const rescale = speedBefore / speedAfter;
+          vxRef.current *= rescale;
+          vyRef.current *= rescale;
+        }
+        // cap lateral component so ball can't go perfectly sideways
+        const totalSpeed = Math.hypot(vxRef.current, vyRef.current);
+        if (portraitModeRef.current) {
+          const maxVx = totalSpeed * 0.968;
+          if (Math.abs(vxRef.current) > maxVx) {
+            vxRef.current = Math.sign(vxRef.current) * maxVx;
+            vyRef.current = Math.sign(vyRef.current || 1) * Math.sqrt(Math.max(0, totalSpeed ** 2 - maxVx ** 2));
+          }
+        } else {
+          const maxVy = totalSpeed * 0.968;
+          if (Math.abs(vyRef.current) > maxVy) {
+            vyRef.current = Math.sign(vyRef.current) * maxVy;
+            vxRef.current = Math.sign(vxRef.current || 1) * Math.sqrt(Math.max(0, totalSpeed ** 2 - maxVy ** 2));
+          }
         }
       }
 

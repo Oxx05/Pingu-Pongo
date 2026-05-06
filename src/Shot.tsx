@@ -4,11 +4,11 @@ import { useEffect, useRef } from "react";
 import iceShardGif from "./ice-shard.gif";
 
 type ShotProps = {
-  /** Starting X (left edge of the image) */
+  /** Starting X — left edge of image (landscape) or paddle center X (portrait) */
   startX: number;
-  /** Starting Y (center of the paddle) */
+  /** Starting Y — paddle center (landscape) or launch edge Y (portrait) */
   startY: number;
-  /** +1 → goes right (player1 shot), -1 → goes left (player2 shot) */
+  /** +1 → right/down, -1 → left/up */
   direction: 1 | -1;
   /** Ref to the enemy paddle div for hit detection */
   enemyRef: React.RefObject<HTMLDivElement | null>;
@@ -17,14 +17,38 @@ type ShotProps = {
   /** Called when the shard leaves the screen without hitting */
   onMiss: () => void;
   paused?: boolean;
+  /** Portrait mode: shot travels vertically instead of horizontally */
+  vertical?: boolean;
 };
 
-const SPEED = 900; // px/s
+const SPEED = 1800; // px/s
 const IMG_W = 144;
 const IMG_H = 72;
 
-export default function Shot({ startX, startY, direction, enemyRef, onHit, onMiss, paused = false }: ShotProps) {
-  const posRef = useRef({ x: startX, y: startY - IMG_H / 2 });
+/**
+ * Vertical shots: the 144×72 img is rotated -90deg/90deg around its center (72, 36).
+ * After rotation the visual bounding box is 72×144.
+ * posRef still tracks the div top-left (144×72 layout).
+ *   visual_cx = posRef.x + IMG_W/2  (= posRef.x + 72)
+ *   visual_cy = posRef.y + IMG_H/2  (= posRef.y + 36)
+ *   visual box: cx±36 × cy±72
+ *
+ * Launch positions:
+ *   upward   (dir=-1, player1 at bottom): visual bottom = rect.top → cy = rect.top − 72
+ *   downward (dir=+1, player2 at top):    visual top    = rect.bottom → cy = rect.bottom + 72
+ */
+function initPos(startX: number, startY: number, direction: 1 | -1, vertical: boolean) {
+  if (!vertical) {
+    return { x: startX, y: startY - IMG_H / 2 };
+  }
+  // startX = paddle center X, startY = launch edge Y (rect.top or rect.bottom)
+  const cx = startX;
+  const cy = direction === -1 ? startY - 72 : startY + 72;
+  return { x: cx - IMG_W / 2, y: cy - IMG_H / 2 };
+}
+
+export default function Shot({ startX, startY, direction, enemyRef, onHit, onMiss, paused = false, vertical = false }: ShotProps) {
+  const posRef = useRef(initPos(startX, startY, direction, vertical));
   const elRef = useRef<HTMLDivElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const lastRef = useRef<number | null>(null);
@@ -52,30 +76,46 @@ export default function Shot({ startX, startY, direction, enemyRef, onHit, onMis
       const dt = Math.min((t - lastRef.current) / 1000, 0.05);
       lastRef.current = t;
 
-      posRef.current.x += SPEED * direction * dt;
+      if (vertical) {
+        posRef.current.y += SPEED * direction * dt;
+      } else {
+        posRef.current.x += SPEED * direction * dt;
+      }
 
       const x = posRef.current.x;
       const y = posRef.current.y;
 
       // Out of screen → miss
-      if (x > window.innerWidth || x + IMG_W < 0) {
-        doneRef.current = true;
-        onMissRef.current();
-        return;
+      if (vertical) {
+        const cy = y + IMG_H / 2;
+        if (direction === -1 ? cy + 72 < 0 : cy - 72 > window.innerHeight) {
+          doneRef.current = true;
+          onMissRef.current();
+          return;
+        }
+      } else {
+        if (x > window.innerWidth || x + IMG_W < 0) {
+          doneRef.current = true;
+          onMissRef.current();
+          return;
+        }
       }
 
       // Hit detection against enemy paddle
       if (enemyRef.current) {
         const pr = enemyRef.current.getBoundingClientRect();
-        // AABB overlap between shard rect and paddle rect
-        const shardRight  = x + IMG_W;
-        const shardBottom = y + IMG_H;
-        const hit =
-          shardRight  > pr.left &&
-          x           < pr.right &&
-          shardBottom > pr.top &&
-          y           < pr.bottom;
-
+        let sl: number, sr: number, st: number, sb: number;
+        if (vertical) {
+          // Visual box after rotation: cx±36, cy±72
+          const cx = x + IMG_W / 2;
+          const cy = y + IMG_H / 2;
+          sl = cx - 36; sr = cx + 36;
+          st = cy - 72; sb = cy + 72;
+        } else {
+          sl = x; sr = x + IMG_W;
+          st = y; sb = y + IMG_H;
+        }
+        const hit = sr > pr.left && sl < pr.right && sb > pr.top && st < pr.bottom;
         if (hit) {
           doneRef.current = true;
           if (elRef.current) elRef.current.style.display = "none";
@@ -117,8 +157,9 @@ export default function Shot({ startX, startY, direction, enemyRef, onHit, onMis
         alt=""
         style={{
           display: "block",
-          // flip horizontally when going left
-          transform: direction === -1 ? "scaleX(-1)" : undefined,
+          transform: vertical
+            ? (direction === -1 ? "rotate(-90deg)" : "rotate(90deg)")
+            : (direction === -1 ? "scaleX(-1)" : undefined),
           imageRendering: "pixelated",
           filter: "drop-shadow(0 0 4px #a8d8f088)",
         }}

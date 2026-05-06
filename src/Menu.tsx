@@ -430,6 +430,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflowY: "auto",
     overflowX: "hidden",
     zIndex: 100,
+    touchAction: "pan-y",
   },
   container: {
     display: "flex",

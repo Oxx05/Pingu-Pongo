@@ -3,7 +3,6 @@
 import { useState } from "react";
 import type { DataConnection } from "peerjs";
 import type { GameConfig } from "./gameTypes.ts";
-import { DEFAULT_CONFIG } from "./gameTypes.ts";
 import Menu from "./Menu.tsx";
 import Game from "./Game.tsx";
 import GuestGame from "./GuestGame.tsx";
@@ -79,7 +78,6 @@ export default function App() {
     <Menu
       onPlay={(config) => setPhase({ t: "assign", config })}
       onOnline={() => setPhase({ t: "lobby" })}
-      defaultConfig={DEFAULT_CONFIG}
     />
   );
 }

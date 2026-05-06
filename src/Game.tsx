@@ -201,7 +201,8 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const BALL_RADIUS = isTouchDevice ? Math.round(Math.min(14, vh * 0.02)) : Math.round(Math.min(20, vh * 0.028));
+  const minDim = Math.min(vw, vh);
+  const BALL_RADIUS = isTouchDevice ? Math.round(Math.min(14, minDim * 0.02)) : Math.round(Math.min(20, minDim * 0.028));
   const BALL_RADIUS_BIG = Math.round(BALL_RADIUS * 2.2);
   const BALL_RADIUS_MINI = Math.round(BALL_RADIUS * 0.45);
   // Scale ball speed to screen size so crossing time feels consistent across devices.
@@ -218,7 +219,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   const ITEM_RADIUS = Math.round(Math.min(18, vh * 0.04));
   const PADDLE_OFFSET = Math.round(Math.min(100, Math.max(36, vw * 0.08)));
   // Portrait dimensions
-  const PORT_PADDLE_W = Math.round(Math.min(130, vw * 0.33));
+  const PORT_PADDLE_W = Math.round(Math.min(110, vw * 0.26));
   const PORT_PADDLE_H = Math.round(Math.min(14, vw * 0.038));
   const PORT_PAD_OFF = Math.round(Math.min(60, vh * 0.08));
 
@@ -303,7 +304,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   const isPortraitRef = useRef(isPortrait);
   useEffect(() => { isPortraitRef.current = isPortrait; }, [isPortrait]);
 
-  type ShotData = { id: string; startX: number; startY: number; direction: 1 | -1; shooter: PlayerId };
+  type ShotData = { id: string; startX: number; startY: number; direction: 1 | -1; shooter: PlayerId; vertical?: boolean };
   const [shots, setShots] = useState<ShotData[]>([]);
 
   const timeoutByKeyRef = useRef<Record<string, number | null>>({});
@@ -359,11 +360,13 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   // New item refs
   const overchargeRef = useRef<PlayerId | null>(null);
   const curveShotRef = useRef<{ player: PlayerId; count: number } | null>(null);
+  const curveForceSideRef = useRef<number | null>(null);
   const repulsorRef = useRef<PlayerId | null>(null);
   const vortexRef = useRef<PlayerId | null>(null);
   const barrierActiveRef = useRef<PlayerId | null>(null);
   const reflexoRef = useRef<PlayerId | null>(null);
   const divisorRef = useRef<PlayerId | null>(null);
+  const divisorDecoyTimerRef = useRef<number | null>(null);
   const tempestadeIntervalRef = useRef<number | null>(null);
 
   const [paddleHidden, setPaddleHidden] = useState<PlayerId | null>(null);
@@ -379,6 +382,12 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
   function isBallInMyHalf(player: PlayerId): boolean {
     if (!bolaRef.current) return true;
     const rect = bolaRef.current.getBoundingClientRect();
+    if (isPortraitRef.current) {
+      const ballY = rect.top + rect.height / 2;
+      const halfH = window.innerHeight / 2;
+      // player1 is at bottom (Y > half), player2 is at top (Y < half)
+      return player === "player1" ? ballY >= halfH : ballY <= halfH;
+    }
     const ballX = rect.left + rect.width / 2;
     const halfW = window.innerWidth / 2;
     return player === "player1" ? ballX <= halfW : ballX >= halfW;
@@ -449,6 +458,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     });
     slowCountRef.current = 0;
     slowSavedSpeedRef.current = 0;
+    slowMaxSpeedRef.current = Infinity;
     slowSavedPlayerSpeedRef.current = { player1: 1, player2: 1 };
     bigBallCountRef.current = 0;
     miniBallCountRef.current = 0;
@@ -467,11 +477,13 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     lastHitTimeRef.current = 0;
     overchargeRef.current = null;
     curveShotRef.current = null;
+    curveForceSideRef.current = null;
     repulsorRef.current = null;
     vortexRef.current = null;
     barrierActiveRef.current = null;
     reflexoRef.current = null;
     divisorRef.current = null;
+    if (divisorDecoyTimerRef.current !== null) { clearTimeout(divisorDecoyTimerRef.current); divisorDecoyTimerRef.current = null; }
     if (tempestadeIntervalRef.current !== null) { clearInterval(tempestadeIntervalRef.current); tempestadeIntervalRef.current = null; }
     if (ballLaunchTimerRef.current !== null) { clearTimeout(ballLaunchTimerRef.current); ballLaunchTimerRef.current = null; }
     setPaddleHidden(null);
@@ -541,9 +553,9 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     setScore(newScore);
     setGoalMultiplier(prev => ({ ...prev, [scored]: 1 }));
 
-    // Cancel timeouts belonging to the conceding player + all distortion
+    // Cancel timeouts belonging to the conceding player + all distortion + both players' timerChange
     for (const k of Object.keys(timeoutByKeyRef.current)) {
-      if (k.endsWith(`:${conceding}`) || k.startsWith("distort:")) {
+      if (k.endsWith(`:${conceding}`) || k.startsWith("distort:") || k === "timer:player1" || k === "timer:player2") {
         const id = timeoutByKeyRef.current[k];
         if (id != null) clearTimeout(id);
         timeoutByKeyRef.current[k] = null;
@@ -570,11 +582,22 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       distortionIntervalRef.current = null;
     }
     distortionSavedSpeedRef.current = 0;
-    // Slow: clear entirely (ball speed resets; conceding player loses their speed debuff)
+    // Slow: clear entirely — restore scorer's pre-slow paddle speed, conceding loses everything
+    const savedPlayerSpeeds = { ...slowSavedPlayerSpeedRef.current };
+    const wasSlowActive = slowCountRef.current > 0;
     slowCountRef.current = 0;
     slowSavedSpeedRef.current = 0;
+    slowMaxSpeedRef.current = Infinity;
     slowSavedPlayerSpeedRef.current = { player1: 1, player2: 1 };
-    setPlayerSpeedMultiplier(prev => ({ ...prev, [conceding]: 1 }));
+    if (wasSlowActive) {
+      setPlayerSpeedMultiplier(prev => ({
+        ...prev,
+        [scored]: savedPlayerSpeeds[scored],
+        [conceding]: 1,
+      }));
+    } else {
+      setPlayerSpeedMultiplier(prev => ({ ...prev, [conceding]: 1 }));
+    }
 
     // Clear conceding player's per-player effects
     frozenStateRef.current[conceding] = false;
@@ -587,7 +610,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
     // Clear new effect refs for conceding player
     if (overchargeRef.current === conceding) overchargeRef.current = null;
-    if (curveShotRef.current?.player === conceding) curveShotRef.current = null;
+    if (curveShotRef.current?.player === conceding) { curveShotRef.current = null; curveForceSideRef.current = null; }
     if (repulsorRef.current === conceding) repulsorRef.current = null;
     if (vortexRef.current === conceding) vortexRef.current = null;
     if (reflexoRef.current === conceding) reflexoRef.current = null;
@@ -702,7 +725,15 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     setTimedEffect(
       key, 7000,
       () => setPlayerSpeedMultiplier(prev => ({ ...prev, [player]: 1.55 })),
-      () => setPlayerSpeedMultiplier(prev => ({ ...prev, [player]: 1 })),
+      () => {
+        if (slowCountRef.current > 0) {
+          // slow is still active — restore to slow-scaled base and update snapshot
+          setPlayerSpeedMultiplier(prev => ({ ...prev, [player]: SLOW_FACTOR }));
+          slowSavedPlayerSpeedRef.current = { ...slowSavedPlayerSpeedRef.current, [player]: 1 };
+        } else {
+          setPlayerSpeedMultiplier(prev => ({ ...prev, [player]: 1 }));
+        }
+      },
       { label: "VELOZ", icon: Rabbit, color: "#51cf66", player }
     );
   }
@@ -713,7 +744,14 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     setTimedEffect(
       key, 8000,
       () => setPlayerSpeedMultiplier(prev => ({ ...prev, [enemy]: 0.5 })),
-      () => setPlayerSpeedMultiplier(prev => ({ ...prev, [enemy]: 1 })),
+      () => {
+        if (slowCountRef.current > 0) {
+          setPlayerSpeedMultiplier(prev => ({ ...prev, [enemy]: SLOW_FACTOR }));
+          slowSavedPlayerSpeedRef.current = { ...slowSavedPlayerSpeedRef.current, [enemy]: 1 };
+        } else {
+          setPlayerSpeedMultiplier(prev => ({ ...prev, [enemy]: 1 }));
+        }
+      },
       { label: "LENTO", icon: Turtle, color: "#ff6b6b", player: enemy }
     );
     notify("▼ VELOCIDADE", "#ff6b6b", enemy);
@@ -724,7 +762,12 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     setTimedEffect(
       key, 9000,
       () => setPlayerSizeMultiplier(prev => ({ ...prev, [player]: 1.6 })),
-      () => setPlayerSizeMultiplier(prev => ({ ...prev, [player]: 1 })),
+      () => {
+        // don't reset if megaBarra is still active for this player
+        if (!timeoutByKeyRef.current[`megasize:${player}`]) {
+          setPlayerSizeMultiplier(prev => ({ ...prev, [player]: 1 }));
+        }
+      },
       { label: "BARRA+", icon: Expand, color: "#4dabf7", player }
     );
   }
@@ -908,7 +951,11 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     setTimedEffect(
       key, 4000,
       () => setPlayerSizeMultiplier(prev => ({ ...prev, [player]: 2.4 })),
-      () => setPlayerSizeMultiplier(prev => ({ ...prev, [player]: 1 })),
+      () => {
+        // fall back to sizeBlue multiplier if still active, otherwise reset
+        const fallback = timeoutByKeyRef.current[`size:${player}`] ? 1.6 : 1;
+        setPlayerSizeMultiplier(prev => ({ ...prev, [player]: fallback }));
+      },
       { label: "MEGA BARRA", icon: MoveVertical, color: "#4dabf7", player }
     );
   }
@@ -974,11 +1021,20 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     const barraRef = player === "player1" ? barra1Ref : barra2Ref;
     if (!barraRef.current) return;
     const rect = barraRef.current.getBoundingClientRect();
-    const direction = player === "player1" ? 1 : -1 as 1 | -1;
-    const startX = player === "player1" ? rect.right : rect.left - 48;
-    const startY = rect.top + rect.height / 2;
     const id = `shot-${Date.now()}-${Math.random()}`;
-    setShots(prev => [...prev, { id, startX, startY, direction, shooter: player }]);
+    if (isPortraitRef.current) {
+      // Portrait: paddles are top/bottom — fire vertically
+      // player1 is at bottom and fires up (-1), player2 at top fires down (+1)
+      const direction = player === "player1" ? -1 : 1 as 1 | -1;
+      const startX = rect.left + rect.width / 2;
+      const startY = player === "player1" ? rect.top : rect.bottom;
+      setShots(prev => [...prev, { id, startX, startY, direction, shooter: player, vertical: true }]);
+    } else {
+      const direction = player === "player1" ? 1 : -1 as 1 | -1;
+      const startX = player === "player1" ? rect.right : rect.left - 48;
+      const startY = rect.top + rect.height / 2;
+      setShots(prev => [...prev, { id, startX, startY, direction, shooter: player }]);
+    }
   }
 
   function invertControls(player: PlayerId) {
@@ -1013,9 +1069,10 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       }
       turbineCountRef.current++;
       const currentSpeed = Math.hypot(VxRef.current, VyRef.current);
-      if (currentSpeed > 0) {
-        VxRef.current = VxRef.current / currentSpeed * 1050;
-        VyRef.current = VyRef.current / currentSpeed * 1050;
+      const turbineSpeed = startBallSpeedRef.current * 2.1;
+      if (currentSpeed > 0 && currentSpeed < turbineSpeed) {
+        VxRef.current = VxRef.current / currentSpeed * turbineSpeed;
+        VyRef.current = VyRef.current / currentSpeed * turbineSpeed;
       }
     }
 
@@ -1170,11 +1227,11 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
   const allItemPool: ItemEntry[] = [
     { id: "random-direction", icon: Shuffle,   color: "#ffd43b",
-      canActivate: () => Date.now() - lastHitTimeRef.current >= 1500,
+      canActivate: () => Date.now() - lastHitTimeRef.current >= 600,
       onCatch: () => randomDirection() },
     { id: "timer-change",     icon: TimerReset,   color: "#91a7ff", onCatch: (p) => timerChange(p) },
     { id: "reverse-x",        icon: Undo2,     color: "#ffd43b",
-      canActivate: () => Date.now() - lastHitTimeRef.current >= 1500,
+      canActivate: () => Date.now() - lastHitTimeRef.current >= 600,
       onCatch: () => reverseX() },
     { id: "distortion",       icon: Activity,     color: "#74c0fc", onCatch: (p) => distortion(p) },
     { id: "size-blue",        icon: Expand,       color: "#4dabf7", onCatch: (p) => sizeBlue(p) },
@@ -1210,10 +1267,10 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
     { id: "tempestade",   icon: Wind,       color: "#4dabf7", onCatch: (p) => tempestadeItem(p) },
     { id: "divisor",      icon: GitBranch,  color: "#63e6be", onCatch: (p) => divisorItem(p) },
   ];
-  // Filter by user-selected items
-  const itemPool = config.selectedItemIds === null
-    ? allItemPool
-    : allItemPool.filter(it => config.selectedItemIds!.includes(it.id));
+  // Filter by user-selected items, then remove items incompatible with current mode/orientation
+  const itemPool = (config.selectedItemIds === null ? allItemPool : allItemPool.filter(it => config.selectedItemIds!.includes(it.id)))
+    .filter(it => !(config.mode === "solo" && it.id === "swap-items"))
+    .filter(it => !(isPortrait && it.id === "barrier"));
   const itemPoolRef = useRef(itemPool);
   // Keep ref in sync every render so RAF closures always see the current filtered pool
   itemPoolRef.current = itemPool;
@@ -1339,10 +1396,12 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       VxRef.current = directionSign * Math.abs(speed * Math.cos(angle));
       VyRef.current = speed * Math.sin(angle) + barraVyRef.current * 0.008;
       vyAccelRef.current = configRef.current.spinEnabled ? -barraVyRef.current * 0.5 : 0;
+      curveForceSideRef.current = null;
 
-      // TIRO CURVO: add extra curve acceleration
+      // TIRO CURVO: sustained lateral force in the direction the paddle was moving
       if (curveShotRef.current?.player === hitter && curveShotRef.current.count > 0) {
-        vyAccelRef.current += impact * 700;
+        const curveDir = Math.sign(barraVyRef.current) || Math.sign(impact) || 1;
+        curveForceSideRef.current = curveDir * 380;
         curveShotRef.current.count--;
         if (curveShotRef.current.count <= 0) curveShotRef.current = null;
       }
@@ -1371,6 +1430,11 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
             { id: `div-${Date.now()}-0`, x: bx, y: by, radius: br, vx: Math.cos(baseAngle + 0.45) * curSpeed, vy: Math.sin(baseAngle + 0.45) * curSpeed },
             { id: `div-${Date.now()}-1`, x: bx, y: by, radius: br, vx: Math.cos(baseAngle - 0.45) * curSpeed, vy: Math.sin(baseAngle - 0.45) * curSpeed },
           ]);
+          if (divisorDecoyTimerRef.current !== null) clearTimeout(divisorDecoyTimerRef.current);
+          divisorDecoyTimerRef.current = window.setTimeout(() => {
+            setDecoys(prev => prev.filter(d => !d.id.startsWith("div-")));
+            divisorDecoyTimerRef.current = null;
+          }, 5000);
         }
       }
     }
@@ -1404,9 +1468,12 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       VyRef.current = (goingUp ? -1 : 1) * Math.abs(speed * Math.cos(angle));
       VxRef.current = speed * Math.sin(angle) + barraVxRef.current * 0.008;
       vyAccelRef.current = configRef.current.spinEnabled ? -barraVxRef.current * 0.5 : 0;
+      curveForceSideRef.current = null;
 
+      // TIRO CURVO: sustained lateral force in the direction the paddle was moving
       if (curveShotRef.current?.player === hitter && curveShotRef.current.count > 0) {
-        vyAccelRef.current += impact * 700;
+        const curveDir = Math.sign(barraVxRef.current) || Math.sign(impact) || 1;
+        curveForceSideRef.current = curveDir * 380;
         curveShotRef.current.count--;
         if (curveShotRef.current.count <= 0) curveShotRef.current = null;
       }
@@ -1434,6 +1501,11 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
             { id: `div-${Date.now()}-0`, x: bx, y: by, radius: br, vx: Math.cos(baseAngle + 0.45) * curSpeed, vy: Math.sin(baseAngle + 0.45) * curSpeed },
             { id: `div-${Date.now()}-1`, x: bx, y: by, radius: br, vx: Math.cos(baseAngle - 0.45) * curSpeed, vy: Math.sin(baseAngle - 0.45) * curSpeed },
           ]);
+          if (divisorDecoyTimerRef.current !== null) clearTimeout(divisorDecoyTimerRef.current);
+          divisorDecoyTimerRef.current = window.setTimeout(() => {
+            setDecoys(prev => prev.filter(d => !d.id.startsWith("div-")));
+            divisorDecoyTimerRef.current = null;
+          }, 5000);
         }
       }
     }
@@ -1578,7 +1650,11 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
       if (shieldActive.player1 && shield1Ref.current) {
         const shield1Rect = shield1Ref.current.getBoundingClientRect();
-        if (collideWithRect(cx, cy, r, prevCx, prevCy, shield1Rect, { current: 0 }, 1, true)) {
+        const shield1Hit = isPortraitRef.current
+          // portrait: horizontal bar above player1 (bottom) — ball approaches from above
+          ? collideWithRectPortrait(cx, cy, r, prevCx, prevCy, shield1Rect, { current: 0 }, true, true)
+          : collideWithRect(cx, cy, r, prevCx, prevCy, shield1Rect, { current: 0 }, 1, true);
+        if (shield1Hit) {
           lastTouchRef.current = "player1";
           collisionRafRef.current = requestAnimationFrame(checkCollision);
           setShieldActive((prev) => ({ ...prev, player1: false }));
@@ -1588,7 +1664,11 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
       if (shieldActive.player2 && shield2Ref.current) {
         const shield2Rect = shield2Ref.current.getBoundingClientRect();
-        if (collideWithRect(cx, cy, r, prevCx, prevCy, shield2Rect, { current: 0 }, -1, false)) {
+        const shield2Hit = isPortraitRef.current
+          // portrait: horizontal bar below player2 (top) — ball approaches from below
+          ? collideWithRectPortrait(cx, cy, r, prevCx, prevCy, shield2Rect, { current: 0 }, false, false)
+          : collideWithRect(cx, cy, r, prevCx, prevCy, shield2Rect, { current: 0 }, -1, false);
+        if (shield2Hit) {
           lastTouchRef.current = "player2";
           collisionRafRef.current = requestAnimationFrame(checkCollision);
           setShieldActive((prev) => ({ ...prev, player2: false }));
@@ -1979,7 +2059,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
       {config.mode === "pong" ? (
-        <Pontuacao score1={score[0]} score2={score[1]} />
+        <Pontuacao score1={score[0]} score2={score[1]} isPortrait={isPortrait} />
       ) : config.mode === "rally" ? (
         <div style={modeHudStyle}>RALLY — {rallyHits} {rallyHits === 1 ? "toque" : "toques"}</div>
       ) : config.mode === "solo" ? (
@@ -1990,6 +2070,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         <StoredItems
           left={{ current: current1 ?? undefined, next: next1 ?? undefined }}
           right={{ current: current2 ?? undefined, next: next2 ?? undefined }}
+          isPortrait={isPortrait}
         />
       )}
 
@@ -2045,7 +2126,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
 
       <ManualMover
         key={isPortrait ? "p1-portrait" : "p1-landscape"}
-        v={500 * playerSpeedMultiplier.player1}
+        v={500 * SPEED_SCALE * playerSpeedMultiplier.player1}
         initialX={isPortrait ? (vw - portPaddleW1) / 2 : PADDLE_OFFSET}
         initialY={isPortrait ? vh - PORT_PAD_OFF - PORT_PADDLE_H : (vh - paddleHeight1) / 2}
         elementHeight={isPortrait ? portPaddleW1 : paddleHeight1}
@@ -2083,7 +2164,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       {config.mode !== "solo" && (
         <ManualMover
           key={isPortrait ? "p2-portrait" : "p2-landscape"}
-          v={500 * playerSpeedMultiplier.player2}
+          v={500 * SPEED_SCALE * playerSpeedMultiplier.player2}
           initialX={isPortrait ? (vw - portPaddleW2) / 2 : vw - PADDLE_OFFSET - BASE_PADDLE_WIDTH}
           initialY={isPortrait ? PORT_PAD_OFF : (vh - paddleHeight2) / 2}
           elementHeight={isPortrait ? portPaddleW2 : paddleHeight2}
@@ -2133,6 +2214,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
         vortexRef={vortexRef}
         repulsorRef={repulsorRef}
         maxSpeedRef={slowMaxSpeedRef}
+        curveForceSideRef={curveForceSideRef}
         paused={winner !== null || gamePaused}
         bounceLeft={config.mode === "rally"}
         bounceRight={config.mode !== "pong"}
@@ -2199,7 +2281,27 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
       {!winner && (
         <button
           onClick={() => setGamePaused(p => !p)}
-          style={{
+          style={isPortrait ? {
+            position: "fixed",
+            left: 8,
+            top: "50%",
+            transform: "translateY(-50%)",
+            background: gamePaused ? "rgba(196,170,255,0.18)" : "rgba(196,170,255,0.07)",
+            border: `1.5px solid ${gamePaused ? "rgba(196,170,255,0.7)" : "rgba(196,170,255,0.4)"}`,
+            color: gamePaused ? "rgba(196,170,255,1)" : "rgba(196,170,255,0.7)",
+            fontFamily: "'Courier New', Courier, monospace",
+            fontSize: "0.65rem",
+            fontWeight: "bold",
+            letterSpacing: "0.15em",
+            padding: "6px 10px",
+            borderRadius: 5,
+            cursor: "pointer",
+            zIndex: 50,
+            whiteSpace: "nowrap",
+            writingMode: "vertical-rl",
+            textOrientation: "mixed",
+            boxShadow: gamePaused ? "0 0 18px rgba(196,170,255,0.25)" : "none",
+          } : {
             position: "fixed",
             top: 8,
             left: "50%",
@@ -2219,7 +2321,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
             boxShadow: gamePaused ? "0 0 18px rgba(196,170,255,0.25)" : "none",
           }}
         >
-          {gamePaused ? "▶  CONTINUAR" : "II  PAUSA"}
+          {gamePaused ? "▶  CONT" : "II  PAUSA"}
         </button>
       )}
 
@@ -2278,6 +2380,7 @@ export default function Game({ config: configProp, conn, onBack, p1GamepadIndex,
           direction={s.direction}
           enemyRef={s.shooter === "player1" ? barra2Ref : barra1Ref}
           paused={winner !== null || gamePaused}
+          vertical={s.vertical}
           onHit={() => {
             setShots(prev => prev.filter(x => x.id !== s.id));
             applyFreeze(opposite(s.shooter));

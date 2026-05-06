@@ -70,6 +70,8 @@ export default function ManualMover({
   const inertiaRef = useRef(inertia);
   useEffect(() => { inertiaRef.current = inertia; }, [inertia]);
   const momentumRef = useRef(0);
+  // Accumulated drift offset for touch mode (panic effect shifts the effective target)
+  const driftAccumRef = useRef(0);
 
   // Vertical movement (landscape)
   const posYRef = useRef(initialY);
@@ -300,22 +302,43 @@ export default function ManualMover({
             else if (goingRight && !goingLeft) nextX = Math.min(prevX + vRef.current * dt, maxX);
           } else if (touchYRef.current !== null) {
             // touchYRef stores clientX of finger when horizontal
-            const rawTarget = Math.max(0, Math.min(maxX, touchYRef.current - h / 2));
+            // Accumulate drift as target offset so panic forces the player to move their finger
+            if (driftRef.current !== 0) {
+              driftAccumRef.current += driftRef.current * dt;
+            } else {
+              driftAccumRef.current = 0;
+            }
+            const rawTarget = Math.max(0, Math.min(maxX, touchYRef.current - h / 2 + driftAccumRef.current));
             const target = invertedRef.current ? maxX - rawTarget : rawTarget;
             const diff = target - prevX;
             const maxMove = vRef.current * dt;
-            nextX = prevX + Math.max(-maxMove, Math.min(maxMove, diff));
+            const move = Math.max(-maxMove, Math.min(maxMove, diff));
+            nextX = prevX + move;
+            if (inertiaRef.current) momentumRef.current = move / dt;
           } else {
             const goingLeft  = invertedRef.current ? (keyDownRef.current || gpDownRef.current) : (keyUpRef.current || gpUpRef.current);
             const goingRight = invertedRef.current ? (keyUpRef.current || gpUpRef.current)     : (keyDownRef.current || gpDownRef.current);
-            if (goingLeft && !goingRight)   nextX = Math.max(prevX - vRef.current * dt, 0);
-            else if (goingRight && !goingLeft) nextX = Math.min(prevX + vRef.current * dt, maxX);
+            if (inertiaRef.current) {
+              const pressing = (goingLeft && !goingRight) ? -1 : (goingRight && !goingLeft) ? 1 : 0;
+              if (pressing !== 0) {
+                momentumRef.current = pressing * vRef.current;
+              } else {
+                momentumRef.current *= Math.pow(0.15, dt);
+                if (Math.abs(momentumRef.current) < 5) momentumRef.current = 0;
+              }
+              nextX = Math.max(0, Math.min(maxX, prevX + momentumRef.current * dt));
+            } else {
+              if (goingLeft && !goingRight)   nextX = Math.max(prevX - vRef.current * dt, 0);
+              else if (goingRight && !goingLeft) nextX = Math.min(prevX + vRef.current * dt, maxX);
+            }
           }
         }
 
-        if (driftRef.current !== 0) {
+        // Drift for keyboard/external — touch handles drift via driftAccumRef instead
+        if (driftRef.current !== 0 && touchYRef.current === null) {
           nextX = Math.max(0, Math.min(maxX, nextX + driftRef.current * dt));
         }
+        if (driftRef.current === 0) driftAccumRef.current = 0;
 
         if (nextX !== prevX) {
           posXRef.current = nextX;
@@ -340,11 +363,19 @@ export default function ManualMover({
           if (goingUp && !goingDown)   nextY = Math.max(prevY - vRef.current * dt, minY);
           else if (goingDown && !goingUp) nextY = Math.min(prevY + vRef.current * dt, maxY);
         } else if (touchYRef.current !== null) {
-          const rawTarget = Math.max(minY, Math.min(maxY, touchYRef.current - h / 2));
+          // Accumulate drift as target offset so panic forces the player to move their finger
+          if (driftRef.current !== 0) {
+            driftAccumRef.current += driftRef.current * dt;
+          } else {
+            driftAccumRef.current = 0;
+          }
+          const rawTarget = Math.max(minY, Math.min(maxY, touchYRef.current - h / 2 + driftAccumRef.current));
           const target = invertedRef.current ? maxY - rawTarget : rawTarget;
           const diff = target - prevY;
           const maxMove = vRef.current * dt;
-          nextY = prevY + Math.max(-maxMove, Math.min(maxMove, diff));
+          const move = Math.max(-maxMove, Math.min(maxMove, diff));
+          nextY = prevY + move;
+          if (inertiaRef.current) momentumRef.current = move / dt;
         } else {
           const goingUp   = invertedRef.current ? (keyDownRef.current || gpDownRef.current) : (keyUpRef.current || gpUpRef.current);
           const goingDown = invertedRef.current ? (keyUpRef.current || gpUpRef.current)     : (keyDownRef.current || gpDownRef.current);
@@ -363,9 +394,11 @@ export default function ManualMover({
           }
         }
 
-        if (driftRef.current !== 0) {
+        // Drift for keyboard/external — touch handles drift via driftAccumRef instead
+        if (driftRef.current !== 0 && touchYRef.current === null) {
           nextY = Math.max(minY, Math.min(maxY, nextY + driftRef.current * dt));
         }
+        if (driftRef.current === 0) driftAccumRef.current = 0;
 
         if (nextY !== prevY) {
           posYRef.current = nextY;
